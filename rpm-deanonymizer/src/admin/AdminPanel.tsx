@@ -5,7 +5,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../auth/AuthContext';
-import { listAccessibleProperties, saveUploadedReport } from '../lib/rpm/persistence';
+import {
+  listAccessibleProperties, saveUploadedReport, listStoredMonths, deleteMonth,
+} from '../lib/rpm/persistence';
 import UploadStar from '../rpm/components/UploadStar';
 import type { UserProfile, Property, Role } from '../lib/types';
 import type { ParsedStar, RosterEntry } from '../lib/rpm/types';
@@ -16,31 +18,89 @@ const OWNER_EMAIL = 'jryan@charlestownehotels.com';
 const ROLES: Role[] = ['none', 'viewer', 'manager', 'admin'];
 
 function PropertyUploadRow({ property }: { property: Property }) {
-  const [summary, setSummary] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [err, setErr] = useState('');
+  const [open, setOpen] = useState(false);
+  const [months, setMonths] = useState<string[]>([]);
+  const [loadingMonths, setLoadingMonths] = useState(false);
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [busyDel, setBusyDel] = useState<string | null>(null);
+
+  async function refreshMonths() {
+    setLoadingMonths(true);
+    try { setMonths(await listStoredMonths(property.id)); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Failed to load uploads'); }
+    finally { setLoadingMonths(false); }
+  }
+
+  const toggleOpen = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) refreshMonths();
+  };
 
   const handle = async (parsed: ParsedStar, roster: RosterEntry[]) => {
     setErr(''); setInfo(null);
     try {
       const r = await saveUploadedReport(property.id, parsed, roster);
-      const parts: string[] = [];
-      if (r.added.length) parts.push(`${r.added.length} new`);
-      if (r.unchanged.length) parts.push(`${r.unchanged.length} unchanged`);
-      if (r.conflicts.length) parts.push(`${r.conflicts.length} flagged`);
-      setInfo(parts.join(' · ') || 'No months found in file.');
-      setSummary(`${parsed.subjectName || 'Report'} · ${parsed.order.length} months`);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Upload failed');
-    }
+      setInfo(
+        r.added.length ? `Added ${r.added[0]}`
+          : r.conflicts.length ? `${r.conflicts[0]} differs from stored — kept existing (flagged in tool)`
+          : r.unchanged.length ? `${r.unchanged[0]} already up to date`
+          : 'No month found in file.',
+      );
+      if (open) refreshMonths(); else setMonths([]);
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Upload failed'); }
+  };
+
+  const del = async (key: string) => {
+    setBusyDel(key); setErr('');
+    try {
+      await deleteMonth(property.id, key);
+      setMonths((prev) => prev.filter((k) => k !== key));
+      setConfirmKey(null);
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Delete failed'); }
+    finally { setBusyDel(null); }
   };
 
   return (
     <div className="settings-prop-row">
-      <div className="settings-prop-name"><span className="prop-dot" />{property.name}</div>
-      <UploadStar onLoaded={handle} summary={summary} />
+      <div className="settings-prop-head">
+        <button className="prop-expander" onClick={toggleOpen} title={open ? 'Collapse' : 'Show uploads'}>
+          <span className={`chevron ${open ? 'open' : ''}`}>▸</span>
+          <span className="prop-dot" />
+          <span className="settings-prop-name">{property.name}</span>
+        </button>
+        <UploadStar onLoaded={handle} />
+      </div>
+
       {info && <div className="upload-info">{info}</div>}
-      {err && <div className="admin-err" style={{ marginBottom: 0 }}>{err}</div>}
+      {err && <div className="admin-err" style={{ marginTop: 8, marginBottom: 0 }}>{err}</div>}
+
+      {open && (
+        <div className="month-list">
+          {loadingMonths ? (
+            <span className="muted">Loading…</span>
+          ) : months.length === 0 ? (
+            <span className="muted">No uploads yet.</span>
+          ) : months.map((k) => (
+            <div className="month-item" key={k}>
+              <span className="month-key">{k}</span>
+              {confirmKey === k ? (
+                <span className="confirm-del">
+                  <span className="muted" style={{ fontSize: 12.5 }}>Delete this upload &amp; its saved work?</span>
+                  <button className="btn danger" disabled={busyDel === k} onClick={() => del(k)}>
+                    {busyDel === k ? 'Deleting…' : 'Delete'}
+                  </button>
+                  <button className="btn" onClick={() => setConfirmKey(null)}>Cancel</button>
+                </span>
+              ) : (
+                <button className="iconbtn del" title="Delete this upload" onClick={() => setConfirmKey(k)}>🗑</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -61,7 +121,6 @@ export default function AdminPanel() {
 
   useEffect(() => { if (profile) loadAll(); /* eslint-disable-next-line */ }, [profile]);
 
-  // Viewers (and unassigned) don't get Settings.
   if (profile && profile.role !== 'admin' && profile.role !== 'manager') {
     return <Navigate to="/app" replace />;
   }
@@ -138,7 +197,6 @@ export default function AdminPanel() {
 
       {err && <div className="admin-err">{err}</div>}
 
-      {/* Upload / Properties */}
       <section className="card" style={{ marginBottom: 18 }}>
         <h2 className="section-title">{isAdmin ? 'Properties & uploads' : 'Upload STR reports'}</h2>
 
@@ -166,7 +224,6 @@ export default function AdminPanel() {
         )}
       </section>
 
-      {/* Users & access — admins only */}
       {isAdmin && (
         <section className="card">
           <h2 className="section-title">Users &amp; access</h2>
