@@ -91,6 +91,21 @@ export async function deleteMonth(propertyId: string, monthKey: string): Promise
   await deleteDoc(doc(db, 'properties', propertyId, 'months', monthKey));
 }
 
+/* ============ per-property COMP BASE (default starting ranks) ============ */
+export interface CompBaseEntry { rankOcc: string; rankAdr: string; }
+export type CompBase = Record<string, CompBaseEntry>; // keyed by norm(name)
+
+export async function loadCompBase(propertyId: string): Promise<CompBase> {
+  const s = await getDoc(doc(db, 'properties', propertyId));
+  if (!s.exists()) return {};
+  const data = s.data() as { compBase?: CompBase };
+  return data.compBase || {};
+}
+
+export async function saveCompBase(propertyId: string, base: CompBase): Promise<void> {
+  await setDoc(doc(db, 'properties', propertyId), { compBase: base }, { merge: true });
+}
+
 export async function listConflicts(propertyId: string): Promise<string[]> {
   const snap = await getDocs(collection(db, 'properties', propertyId, 'months'));
   return snap.docs.filter((d) => (d.data() as MonthDoc).reportConflict).map((d) => d.id);
