@@ -202,23 +202,6 @@ export default function RpmTool() {
     })));
   };
 
-  const toggleMonthLock = async () => {
-    const next = !monthLocked;
-    const nextHotels = hotels.map((h) => {
-      if (h.isSubject) return h;
-      if (next) {
-        const rr = rows?.hs.find((x) => x.id === h.id);
-        return { ...h, locked: true, lockOcc: rr ? +rr.occ.toFixed(1) : h.lockOcc, lockAdr: rr ? +rr.adr.toFixed(2) : h.lockAdr };
-      }
-      return { ...h, locked: false, lockOcc: null, lockAdr: null };
-    });
-    setHotels(nextHotels);
-    setMonthLocked(next);
-    if (parsed && monthKey && propertyId) {
-      try { await saveMonthState(propertyId, monthKey, buildMonthState(nextHotels, bounds, zoom, next)); } catch { /* ignore */ }
-    }
-  };
-
   async function refreshConflicts() {
     if (!propertyId) return;
     const cf = await listConflicts(propertyId);
