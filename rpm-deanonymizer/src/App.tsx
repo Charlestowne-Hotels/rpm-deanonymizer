@@ -3,6 +3,7 @@ import { useState } from 'react';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './components/AppLayout';
 import AdminPanel from './admin/AdminPanel';
+import PropertiesScreen from './rpm/PropertiesScreen';
 import { useAuth, hasAccess } from './auth/AuthContext';
 
 function Landing() {
@@ -107,25 +108,6 @@ function Dashboard() {
   );
 }
 
-function PropertySelect() {
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1 className="page-title">Properties</h1>
-        <p className="page-sub">Properties you've been assigned will appear here.</p>
-      </div>
-      <div className="card">
-        <p className="muted" style={{ margin: 0 }}>
-          The property list and selection land in Phase 4. For now, the tool opens via a direct link.
-        </p>
-        <Link className="btn" to="/app/properties/demo" style={{ marginTop: 12, display: 'inline-block', textDecoration: 'none' }}>
-          Open demo property →
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 function Tool() {
   const { propertyId } = useParams();
   return (
@@ -135,7 +117,7 @@ function Tool() {
         <p className="page-sub">Property: {propertyId}</p>
       </div>
       <div className="card">
-        <p className="muted" style={{ margin: 0 }}>The ported RPM tool lands in Phase 4.</p>
+        <p className="muted" style={{ margin: 0 }}>The ported RPM tool lands in Phase 4d.</p>
       </div>
     </div>
   );
@@ -150,7 +132,7 @@ export default function App() {
 
       <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
-        <Route path="properties" element={<PropertySelect />} />
+        <Route path="properties" element={<PropertiesScreen />} />
         <Route path="properties/:propertyId" element={<Tool />} />
         <Route path="admin" element={<AdminPanel />} />
       </Route>
