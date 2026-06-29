@@ -319,7 +319,6 @@ export default function RpmTool() {
       {propErr && <div className="admin-err">{propErr}</div>}
       {toolErr && <div className="admin-err">{toolErr}</div>}
 
-      <UploadStar onLoaded={onLoaded} summary={uploadSummary} />
       {uploadInfo && <div className="upload-info">{uploadInfo}</div>}
 
       {parsed && month && (
