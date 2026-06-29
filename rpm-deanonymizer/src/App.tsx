@@ -82,33 +82,6 @@ function NoAccess() {
   );
 }
 
-function Dashboard() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
-  const first = (profile?.displayName || profile?.email || '').split(' ')[0];
-
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1 className="page-title">Welcome{first ? `, ${first}` : ''}</h1>
-        <p className="page-sub">What would you like to work on?</p>
-      </div>
-      <div className="card-grid">
-        <Link className="tile" to="/app/properties">
-          <p className="tile-title">Properties →</p>
-          <p className="tile-desc">Open a property and work the RPM tool for a STAR month.</p>
-        </Link>
-        {isAdmin && (
-          <Link className="tile" to="/app/admin">
-            <p className="tile-title">Admin →</p>
-            <p className="tile-desc">Manage users, create properties, and assign access.</p>
-          </Link>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <Routes>
@@ -117,7 +90,7 @@ export default function App() {
       <Route path="/no-access" element={<NoAccess />} />
 
       <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-        <Route index element={<Dashboard />} />
+        <Route index element={<PropertiesScreen />} />
         <Route path="properties" element={<PropertiesScreen />} />
         <Route path="properties/:propertyId" element={<RpmTool />} />
         <Route path="admin" element={<AdminPanel />} />
