@@ -1,5 +1,5 @@
 import {
-  collection, query, where, getDocs, doc, getDoc, setDoc, writeBatch, deleteField,
+  collection, query, where, getDocs, doc, getDoc, setDoc, deleteDoc, deleteField,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Property, UserProfile } from '../types';
@@ -35,16 +35,15 @@ export async function loadMonthState(propertyId: string, monthKey: string): Prom
   const s = await getDoc(doc(db, 'properties', propertyId, 'months', monthKey));
   if (!s.exists()) return null;
   const data = s.data() as Partial<MonthState>;
-  if (!Array.isArray(data.hotels)) return null; // report-only doc, no working state yet
+  if (!Array.isArray(data.hotels)) return null;
   return { locked: !!data.locked, limits: data.limits!, hotels: data.hotels };
 }
 
-/** Save working state. MERGE so report/roster fields in the same doc survive. */
 export async function saveMonthState(propertyId: string, monthKey: string, state: MonthState): Promise<void> {
   await setDoc(doc(db, 'properties', propertyId, 'months', monthKey), state, { merge: true });
 }
 
-/* ============ accumulated REPORT library ============ */
+/* ============ report library ============ */
 interface MonthDoc {
   report?: MonthData;
   subjectName?: string;
@@ -58,7 +57,6 @@ export interface UploadResult { added: string[]; conflicts: string[]; unchanged:
 
 const sortKey = (m: MonthData) => m.year * 100 + MON.indexOf(m.month);
 
-/** Rebuild the accumulated report + roster from stored month docs. Null if nothing stored. */
 export async function loadReportLibrary(propertyId: string): Promise<ReportBundle | null> {
   const snap = await getDocs(collection(db, 'properties', propertyId, 'months'));
   const byMonth: Record<string, MonthData> = {};
@@ -76,6 +74,21 @@ export async function loadReportLibrary(propertyId: string): Promise<ReportBundl
   if (keys.length === 0) return null;
   const order = keys.sort((a, b) => sortKey(byMonth[a]) - sortKey(byMonth[b]));
   return { parsed: { subjectName, order, byMonth }, roster };
+}
+
+/** Month keys that have a stored report, newest first. */
+export async function listStoredMonths(propertyId: string): Promise<string[]> {
+  const snap = await getDocs(collection(db, 'properties', propertyId, 'months'));
+  const items = snap.docs
+    .filter((d) => (d.data() as MonthDoc).report)
+    .map((d) => ({ key: d.id, sk: sortKey((d.data() as MonthDoc).report!) }));
+  items.sort((a, b) => b.sk - a.sk);
+  return items.map((i) => i.key);
+}
+
+/** Delete one upload (its report AND any saved working state). */
+export async function deleteMonth(propertyId: string, monthKey: string): Promise<void> {
+  await deleteDoc(doc(db, 'properties', propertyId, 'months', monthKey));
 }
 
 export async function listConflicts(propertyId: string): Promise<string[]> {
@@ -97,38 +110,43 @@ function reportsDiffer(a: MonthData, b: MonthData): boolean {
   });
 }
 
+/** Find the most-recent month in a parsed report. */
+function mostRecentKey(parsed: ParsedStar): string | null {
+  if (!parsed.order.length) return null;
+  let key = parsed.order[0];
+  let best = sortKey(parsed.byMonth[key]);
+  for (const k of parsed.order) {
+    const sk = sortKey(parsed.byMonth[k]);
+    if (sk > best) { best = sk; key = k; }
+  }
+  return key;
+}
+
 /**
- * Accumulate an uploaded report. KEEP EXISTING months; new months store the
- * report + roster; existing months whose numbers differ get flagged (not overwritten).
+ * Option 1: store ONLY the most-recent month from the upload.
+ * Keep-existing on conflict (flag, don't overwrite).
  */
 export async function saveUploadedReport(
   propertyId: string, parsed: ParsedStar, roster: RosterEntry[],
 ): Promise<UploadResult> {
-  const existingSnap = await getDocs(collection(db, 'properties', propertyId, 'months'));
-  const existing = new Map<string, MonthDoc>();
-  existingSnap.docs.forEach((d) => existing.set(d.id, d.data() as MonthDoc));
+  const key = mostRecentKey(parsed);
+  if (!key) return { added: [], conflicts: [], unchanged: [] };
 
-  const batch = writeBatch(db);
-  const added: string[] = [], conflicts: string[] = [], unchanged: string[] = [];
+  const incoming = parsed.byMonth[key];
   const subjectName = parsed.subjectName || '';
+  const ref = doc(db, 'properties', propertyId, 'months', key);
+  const snap = await getDoc(ref);
+  const prior = snap.exists() ? (snap.data() as MonthDoc) : null;
 
-  parsed.order.forEach((key) => {
-    const incoming = parsed.byMonth[key];
-    const ref = doc(db, 'properties', propertyId, 'months', key);
-    const prior = existing.get(key);
-    if (!prior || !prior.report) {
-      batch.set(ref, { report: incoming, subjectName, roster }, { merge: true });
-      added.push(key);
-    } else if (reportsDiffer(prior.report, incoming)) {
-      batch.set(ref, { reportConflict: true, reportConflictWith: incoming }, { merge: true });
-      conflicts.push(key);
-    } else {
-      unchanged.push(key);
-    }
-  });
-
-  await batch.commit();
-  return { added, conflicts, unchanged };
+  if (!prior || !prior.report) {
+    await setDoc(ref, { report: incoming, subjectName, roster }, { merge: true });
+    return { added: [key], conflicts: [], unchanged: [] };
+  }
+  if (reportsDiffer(prior.report, incoming)) {
+    await setDoc(ref, { reportConflict: true, reportConflictWith: incoming }, { merge: true });
+    return { added: [], conflicts: [key], unchanged: [] };
+  }
+  return { added: [], conflicts: [], unchanged: [key] };
 }
 
 export async function resolveKeepStored(propertyId: string, monthKey: string): Promise<void> {
