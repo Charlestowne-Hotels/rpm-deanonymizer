@@ -143,3 +143,28 @@
 .pencil { border:none; background:none; cursor:pointer; color:var(--mut); font-size:15px; padding:4px 7px; border-radius:7px; transition:.12s; }
 .pencil:hover { background:var(--inset); color:var(--ink); }
 .pencil:disabled { opacity:.35; cursor:not-allowed; }
+
+/* ===== compact upload pill + per-property expander ===== */
+.upload-pill {
+  display:inline-flex; align-items:center; gap:7px; font:inherit; font-size:13px; font-weight:600;
+  color:#fff; background:linear-gradient(135deg,#8b5cf6,#6d28d9); border:none;
+  border-radius:999px; padding:8px 16px; cursor:pointer;
+  box-shadow:0 2px 8px rgba(109,40,217,.30); transition:.13s;
+}
+.upload-pill:hover { filter:brightness(1.06); }
+.upload-pill:active { transform:translateY(1px); }
+.upload-pill:disabled { opacity:.6; cursor:default; }
+.upload-pill svg { display:block; }
+
+.settings-prop-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.prop-expander { display:flex; align-items:center; gap:10px; background:none; border:none; cursor:pointer; padding:4px 0; color:var(--ink); }
+.chevron { display:inline-block; color:var(--faint); font-size:12px; transition:transform .15s; }
+.chevron.open { transform:rotate(90deg); }
+.settings-prop-name { font-size:14px; font-weight:600; margin:0; }
+
+.month-list { margin:10px 0 2px; padding-left:24px; display:flex; flex-direction:column; gap:6px; }
+.month-item { display:flex; align-items:center; gap:12px; }
+.month-key { font-size:13.5px; font-weight:600; font-variant-numeric:tabular-nums; min-width:90px; }
+.confirm-del { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.btn.danger { border-color:#fecaca; color:var(--red); }
+.btn.danger:hover { background:#fef2f2; border-color:#fca5a5; }
