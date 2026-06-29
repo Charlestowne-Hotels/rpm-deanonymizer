@@ -17,6 +17,15 @@ const ORG_ID = 'charlestowne';
 const OWNER_EMAIL = 'jryan@charlestownehotels.com';
 const ROLES: Role[] = ['none', 'viewer', 'manager', 'admin'];
 
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg className={`chevron-ic ${open ? 'open' : ''}`} width="20" height="20" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 function PropertyUploadRow({ property }: { property: Property }) {
   const [info, setInfo] = useState<string | null>(null);
   const [err, setErr] = useState('');
@@ -49,7 +58,7 @@ function PropertyUploadRow({ property }: { property: Property }) {
           : r.unchanged.length ? `${r.unchanged[0]} already up to date`
           : 'No month found in file.',
       );
-      if (open) refreshMonths(); else setMonths([]);
+      if (open) refreshMonths();
     } catch (e) { setErr(e instanceof Error ? e.message : 'Upload failed'); }
   };
 
@@ -67,7 +76,7 @@ function PropertyUploadRow({ property }: { property: Property }) {
     <div className="settings-prop-row">
       <div className="settings-prop-head">
         <button className="prop-expander" onClick={toggleOpen} title={open ? 'Collapse' : 'Show uploads'}>
-          <span className={`chevron ${open ? 'open' : ''}`}>▸</span>
+          <Chevron open={open} />
           <span className="prop-dot" />
           <span className="settings-prop-name">{property.name}</span>
         </button>
@@ -236,6 +245,7 @@ export default function AdminPanel() {
                 const isOwnerDoc = u.email === OWNER_EMAIL;
                 const isAdminUser = u.role === 'admin';
                 const assigned = u.properties || [];
+                // Locked only for your own row, or the owner's row when you aren't the owner.
                 const locked = isSelf || (isOwnerDoc && !meIsOwner);
                 return (
                   <div className="user-row" key={u.uid}>
@@ -246,6 +256,7 @@ export default function AdminPanel() {
                         </span>
                         <span className="user-email">{u.email}</span>
                       </div>
+
                       <div className="user-role">
                         <select
                           className="role-select"
@@ -257,25 +268,27 @@ export default function AdminPanel() {
                           {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </div>
+
                       <div className="user-access-summary">
-                        {isAdminUser ? (
-                          <span className="muted">All properties</span>
-                        ) : (
-                          <>
-                            {assigned.length > 0 && <span className="assigned-count">{assigned.length}</span>}
-                            <button
-                              className="pencil"
-                              title="Manage property access"
-                              disabled={locked}
-                              onClick={() => setExpanded(expanded === u.uid ? null : u.uid)}
-                            >✎</button>
-                          </>
-                        )}
+                        {isAdminUser
+                          ? <span className="access-text">All</span>
+                          : <span className="assigned-count">{assigned.length}</span>}
+                        <button
+                          className="pencil"
+                          title={locked ? 'Your own access can’t be edited here' : 'Manage property access'}
+                          disabled={locked}
+                          onClick={() => setExpanded(expanded === u.uid ? null : u.uid)}
+                        >✎</button>
                       </div>
                     </div>
 
-                    {!isAdminUser && expanded === u.uid && (
+                    {expanded === u.uid && !locked && (
                       <div className="access-editor">
+                        {isAdminUser && (
+                          <span className="muted" style={{ width: '100%', fontSize: 12.5, marginBottom: 4 }}>
+                            Admins can see all properties regardless — these assignments are recorded but don’t restrict an admin.
+                          </span>
+                        )}
                         {properties.length === 0 ? (
                           <span className="muted">Create a property first.</span>
                         ) : properties.map((p) => {
