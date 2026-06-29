@@ -168,3 +168,23 @@
 .confirm-del { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .btn.danger { border-color:#fecaca; color:var(--red); }
 .btn.danger:hover { background:#fef2f2; border-color:#fca5a5; }
+
+/* ===== larger grey expander arrow ===== */
+.chevron-ic { color:var(--faint); transition:transform .15s; flex:0 0 auto; }
+.chevron-ic.open { transform:rotate(180deg); }
+
+/* ===== aligned user rows: name | role | summary+pencil ===== */
+.user-main { display:flex; align-items:center; gap:16px; }
+.user-id { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+.user-role { flex:0 0 auto; width:138px; }
+.user-role .role-select { width:100%; }
+.user-access-summary {
+  flex:0 0 auto; width:96px; display:flex; align-items:center; justify-content:flex-end; gap:10px;
+}
+.access-text { font-size:13px; font-weight:600; color:var(--mut); }
+.assigned-count {
+  font-size:12px; font-weight:700; color:var(--accent-d); background:var(--accent-soft);
+  border-radius:999px; padding:1px 9px; min-width:24px; text-align:center;
+}
+.pencil:disabled { opacity:.3; cursor:default; }
+.pencil:disabled:hover { background:none; color:var(--mut); }
