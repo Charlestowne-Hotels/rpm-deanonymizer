@@ -23,7 +23,7 @@ export default function AppHeader() {
 
         <nav className="nav">
           <NavLink to="/app" end className={navClass}>Properties</NavLink>
-          {(profile?.role === 'admin' || profile?.role === 'manager') && (
+         {(isAdmin || profile?.role === 'manager') && (
             <NavLink to="/app/settings" className={navClass}>Settings</NavLink>
           )}
         </nav>
