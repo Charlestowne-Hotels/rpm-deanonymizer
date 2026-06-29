@@ -93,6 +93,7 @@ export default function App() {
         <Route index element={<PropertiesScreen />} />
         <Route path="properties" element={<PropertiesScreen />} />
         <Route path="properties/:propertyId" element={<RpmTool />} />
+        <Route path="settings" element={<AdminPanel />} />
         <Route path="admin" element={<AdminPanel />} />
       </Route>
 
