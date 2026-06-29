@@ -22,9 +22,8 @@ export default function AppHeader() {
         </Link>
 
         <nav className="nav">
-          <NavLink to="/app" end className={navClass}>Dashboard</NavLink>
-          <NavLink to="/app/properties" className={navClass}>Properties</NavLink>
-          {isAdmin && <NavLink to="/app/admin" className={navClass}>Admin</NavLink>}
+        <NavLink to="/app" end className={navClass}>Properties</NavLink>
+        {isAdmin && <NavLink to="/app/admin" className={navClass}>Admin</NavLink>}
         </nav>
 
         <div className="header-user">
