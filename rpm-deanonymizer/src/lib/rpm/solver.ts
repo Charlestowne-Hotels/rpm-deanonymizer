@@ -1,123 +1,216 @@
+import type {
+  Hotel, Bounds, MonthData, Solution, Rows, HotelRow, StrRow, ParsedStar, RosterEntry,
+} from './types';
 import { MON } from './types';
-import type { ParsedStar, MonthData, MetricBlock, RosterEntry } from './types';
 
-type Grid = (string | number | null)[][];
+/* ---------- utilities ---------- */
+export const norm = (s: string | null | undefined) =>
+  (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+export const money = (n: number) => '$' + Math.round(n).toLocaleString();
+export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+export const monthDays = (m: MonthData) => new Date(m.year, MON.indexOf(m.month) + 1, 0).getDate();
+export const num = (v: unknown): number | null => {
+  const n = parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+};
+const fixedOcc = (h: Hotel): number | null =>
+  h.locked && h.lockOcc != null ? h.lockOcc : num(h.pinOcc);
+const fixedAdr = (h: Hotel): number | null =>
+  h.locked && h.lockAdr != null ? h.lockAdr : num(h.pinAdr);
 
-export function parseStarComp(grid: Grid): ParsedStar {
-  const cs = (v: unknown) => (v == null ? '' : String(v).trim());
-  const cn = (v: unknown) => {
-    if (typeof v === 'number') return v;
-    const n = parseFloat(cs(v));
-    return Number.isFinite(n) ? n : NaN;
-  };
-  const parseRank = (v: unknown) => {
-    const m = cs(v).match(/(\d+)\s*(?:of|\/)\s*(\d+)/i);
-    return m ? { rank: +m[1], size: +m[2] } : { rank: 0, size: 0 };
-  };
-
-  let labelCol = 1;
-  outer: for (let r = 0; r < grid.length; r++)
-    for (let c = 0; c < grid[r].length; c++)
-      if (cs(grid[r][c]).toLowerCase() === 'my property') { labelCol = c; break outer; }
-
-  const findHdr = (re: RegExp) => {
-    for (let r = 0; r < grid.length; r++) if (re.test(cs(grid[r][labelCol]))) return r;
-    return -1;
-  };
-
-  const monthCols = (yearRow: (string | number | null)[], monthRow: (string | number | null)[]) => {
-    const out = new Map<number, { month: string; year: number }>();
-    let year = 0, stop = false;
-    for (let c = 0; c < monthRow.length && !stop; c++) {
-      const y = cn(yearRow[c]);
-      if (Number.isFinite(y) && y > 1900 && y < 3000) year = Math.round(y);
-      const yt = cs(yearRow[c]).toLowerCase();
-      if (yt.includes('year to date') || yt.includes('running')) stop = true;
-      const mon = cs(monthRow[c]);
-      if (MON.includes(mon) && year > 0 && !stop) out.set(c, { month: mon, year });
-    }
-    return out;
-  };
-
-  const block = (hdr: number) => {
-    if (hdr < 0) return null;
-    const cols = monthCols(grid[hdr] || [], grid[hdr + 1] || []);
-    let mp = -1, csr = -1, idx = -1, rank = -1;
-    for (let r = hdr + 2; r < Math.min(hdr + 8, grid.length); r++) {
-      const l = cs(grid[r][labelCol]).toLowerCase();
-      if (l === 'my property' && mp < 0) mp = r;
-      else if (l === 'competitive set' && csr < 0) csr = r;
-      else if (l.indexOf('index') === 0 && idx < 0) idx = r;
-      else if (l === 'rank' && rank < 0) rank = r;
-      if (mp >= 0 && csr >= 0 && idx >= 0 && rank >= 0) break;
-    }
-    if (mp < 0 || csr < 0) return null;
-    return { cols, mp, csr, idx, rank };
-  };
-
-  const occ = block(findHdr(/^occupancy/i));
-  const adr = block(findHdr(/^adr$/i));
-  const rev = block(findHdr(/^revpar$/i));
-
-  const metric = (b: NonNullable<ReturnType<typeof block>>, col: number): MetricBlock => {
-    const rk = parseRank(grid[b.rank] && grid[b.rank][col]);
-    return {
-      subject: cn(grid[b.mp] && grid[b.mp][col]),
-      compSet: cn(grid[b.csr] && grid[b.csr][col]),
-      index: b.idx >= 0 ? cn(grid[b.idx] && grid[b.idx][col]) : NaN,
-      subjectRank: rk.rank, setSize: rk.size,
-    };
-  };
-
-  const byMonth: Record<string, MonthData> = {};
-  const order: string[] = [];
-  if (occ) {
-    for (const [col, my] of occ.cols.entries()) {
-      const key = my.month + ' ' + my.year;
-      const m: MonthData = {
-        key, month: my.month, year: my.year,
-        occ: metric(occ, col),
-        adr: adr && adr.cols.has(col) ? metric(adr, col) : metric(occ, col),
-        revpar: rev && rev.cols.has(col) ? metric(rev, col) : metric(occ, col),
-      };
-      if (Number.isFinite(m.occ.subject)) { byMonth[key] = m; order.push(key); }
-    }
-  }
-
-  let subjectName: string | null = null;
-  for (let r = 0; r < Math.min(6, grid.length); r++) {
-    const s = cs(grid[r][labelCol]);
-    if (s && !/competitive set report|property id|for the month/i.test(s) && /[A-Za-z]/.test(s)) {
-      subjectName = s.split(/\s{2,}/)[0].trim();
-      break;
-    }
-  }
-
-  return { subjectName, order, byMonth };
+/* ---------- distribution helpers (verbatim math) ---------- */
+interface SpreadItem { w: number; score: number; }
+function tieSpread(targetMean: number, items: SpreadItem[], lo: number, hi: number): number[] {
+  const n = items.length;
+  if (!n) return [];
+  targetMean = clamp(targetMean, lo, hi);
+  if (n === 1) return [targetMean];
+  const W = items.reduce((a, it) => a + (it.w || 0), 0) || n;
+  const sbar = items.reduce((a, it) => a + (it.w || 0) * it.score, 0) / W;
+  let maxAmp = 0;
+  items.forEach((it) => {
+    const d = it.score - sbar;
+    if (d > 1e-9) maxAmp = Math.max(maxAmp, (hi - targetMean) / d);
+    else if (d < -1e-9) maxAmp = Math.max(maxAmp, (lo - targetMean) / d);
+  });
+  const span = hi - lo, baseAmp = span * 0.06;
+  const amp = Math.min(baseAmp, maxAmp > 0 ? maxAmp : baseAmp);
+  return items.map((it) => clamp(targetMean + amp * (it.score - sbar), lo, hi));
+}
+function scores(n: number): number[] {
+  if (n === 1) return [0];
+  return Array.from({ length: n }, (_, k) => (n - 1 - 2 * k) / (n - 1));
 }
 
-export function parseResponse(grid: Grid): RosterEntry[] {
-  const cs = (v: unknown) => (v == null ? '' : String(v).trim());
-  let hr = -1, cStr = -1, cName = -1, cRooms = -1;
-  for (let r = 0; r < grid.length; r++) {
-    const row = grid[r];
-    let s = -1, n = -1, rm = -1;
-    for (let c = 0; c < row.length; c++) {
-      const t = cs(row[c]).toLowerCase();
-      if (t === 'str#') s = c;
-      else if (t === 'name') n = c;
-      else if (t === 'rooms') rm = c;
+/* ---------- per-axis competitor placement (verbatim math) ---------- */
+function anchoredAxis(
+  Vs: number, subjRank: number, comps: Hotel[],
+  fixedVal: (h: Hotel) => number | null, getRank: (h: Hotel) => number | null,
+  w: (h: Hotel) => number, freeMean: number, lo: number, hi: number,
+  warn: string[], axis: string,
+): Record<number, number> {
+  const out: Record<number, number> = {};
+  const fixed = comps.filter((h) => fixedVal(h) != null);
+  fixed.forEach((h) => { out[h.id] = fixedVal(h) as number; });
+  const movable = comps.filter((h) => fixedVal(h) == null);
+  if (!movable.length) return out;
+  const Wmov = movable.reduce((s, h) => s + (w(h) || 0), 0);
+  if (Wmov <= 0) { movable.forEach((h) => { out[h.id] = clamp(freeMean, lo, hi); }); return out; }
+
+  const anchor = subjRank >= 1;
+  const above = anchor ? movable.filter((h) => getRank(h) != null && (getRank(h) as number) < subjRank) : [];
+  const below = anchor ? movable.filter((h) => getRank(h) != null && (getRank(h) as number) > subjRank) : [];
+  const rest = movable.filter((h) => above.indexOf(h) < 0 && below.indexOf(h) < 0);
+  above.sort((a, b) => (getRank(a) as number) - (getRank(b) as number));
+  below.sort((a, b) => (getRank(a) as number) - (getRank(b) as number));
+  const remGroup = below.concat(rest);
+
+  if (above.length && !remGroup.length) {
+    const sc0 = scores(above.length);
+    const v0 = tieSpread(freeMean, above.map((h, i) => ({ w: w(h) || 1, score: sc0[i] })), lo, hi);
+    above.forEach((h, i) => { out[h.id] = v0[i]; });
+    if (freeMean < Vs - 0.05)
+      warn.push('Everything is ranked above you on ' + axis +
+        ", but the totals need a lower average — they can't all stay above you and still tie out.");
+    return out;
+  }
+
+  const step = Math.max(Vs * 0.04, 0.8), nA = above.length;
+  above.forEach((h, i) => { out[h.id] = clamp(Vs + step * (nA - i), Vs + 1e-6, hi); });
+  const sumAboveWV = above.reduce((s, h) => s + (w(h) || 0) * out[h.id], 0);
+  const Wabove = above.reduce((s, h) => s + (w(h) || 0), 0);
+  const Wrem = Wmov - Wabove;
+  const remMean = Wrem > 0 ? (freeMean * Wmov - sumAboveWV) / Wrem : freeMean;
+
+  const ordered = below.concat(rest);
+  const sc = scores(ordered.length);
+  const vals = tieSpread(remMean, ordered.map((h, i) => ({ w: w(h) || 1, score: sc[i] })), lo, hi);
+  ordered.forEach((h, i) => { out[h.id] = vals[i]; });
+
+  below.forEach((h) => {
+    if (out[h.id] >= Vs) {
+      out[h.id] = Math.max(lo, Vs - 1e-6);
+      warn.push('A hotel ranked below you on ' + axis +
+        " can't stay below while tying out — rank held; totals may not tie.");
     }
-    if (s >= 0 && n >= 0 && rm >= 0) { hr = r; cStr = s; cName = n; cRooms = rm; break; }
-  }
-  if (hr < 0) return [];
-  const out: RosterEntry[] = [];
-  for (let r = hr + 1; r < grid.length; r++) {
-    const strv = cs(grid[r][cStr]);
-    if (!/^\d+$/.test(strv)) break;
-    const name = cs(grid[r][cName]);
-    const rooms = parseInt(cs(grid[r][cRooms]), 10) || 0;
-    if (name) out.push({ str: strv, name, rooms });
-  }
+  });
+
+  if (Wrem > 0 && (remMean < lo - 0.1 || remMean > hi + 0.1))
+    warn.push(axis + " can't tie out within limits — adjust pins/ranks or loosen the limits.");
   return out;
+}
+
+/* ---------- solver ---------- */
+export function solve(m: MonthData, hotels: Hotel[], B: Bounds): Solution {
+  const warn: string[] = [];
+  const subj = hotels.find((h) => h.isSubject);
+  const comps = hotels.filter((h) => !h.isSubject);
+  if (!subj) { warn.push('No subject row found.'); return { occ: {}, adr: {}, warn, tie: false }; }
+  if (!comps.length) { warn.push('No competitors found in the report.'); return { occ: {}, adr: {}, warn, tie: false }; }
+
+  const occS = m.occ.subject, adrS = m.adr.subject, OCC = m.occ.compSet, ADR = m.adr.compSet;
+  const roomsSubj = subj.rooms || 0;
+  const roomsComps = comps.reduce((s, h) => s + (h.rooms || 0), 0);
+  if (roomsComps <= 0) warn.push('Enter competitor room counts (Keys) so the math can weight hotels.');
+
+  const occ: Record<number, number> = {}, adr: Record<number, number> = {};
+  occ[subj.id] = occS; adr[subj.id] = adrS;
+
+  const subjSold = roomsSubj * occS / 100;
+  const soldFixed = comps.filter((h) => fixedOcc(h) != null)
+    .reduce((s, h) => s + (h.rooms || 0) * (fixedOcc(h) as number) / 100, 0);
+  const roomsMov = comps.filter((h) => fixedOcc(h) == null).reduce((s, h) => s + (h.rooms || 0), 0);
+  const totalSoldTarget = OCC / 100 * (roomsComps + roomsSubj);
+  const soldMovTarget = totalSoldTarget - subjSold - soldFixed;
+  const freeMeanOcc = roomsMov > 0 ? soldMovTarget / roomsMov * 100 : OCC;
+  const occOut = anchoredAxis(occS, m.occ.subjectRank, comps, fixedOcc, (h) => num(h.rankOcc),
+    (h) => (h.rooms || 0), freeMeanOcc, B.oLo, B.oHi, warn, 'Occupancy');
+  comps.forEach((h) => { occ[h.id] = occOut[h.id] != null ? occOut[h.id] : freeMeanOcc; });
+
+  const soldU = (h: Hotel) => (h.rooms || 0) * (occ[h.id] || 0) / 100;
+  const subjSoldU = soldU(subj);
+  const totalSoldU = comps.reduce((s, h) => s + soldU(h), 0) + subjSoldU;
+  const revFixed = comps.filter((h) => fixedAdr(h) != null)
+    .reduce((s, h) => s + soldU(h) * (fixedAdr(h) as number), 0);
+  const soldMovU = comps.filter((h) => fixedAdr(h) == null).reduce((s, h) => s + soldU(h), 0);
+  const totalRevTarget = ADR * totalSoldU;
+  const revMovTarget = totalRevTarget - subjSoldU * adrS - revFixed;
+  const freeMeanAdr = soldMovU > 0 ? revMovTarget / soldMovU : ADR;
+  const adrOut = anchoredAxis(adrS, m.adr.subjectRank, comps, fixedAdr, (h) => num(h.rankAdr),
+    soldU, freeMeanAdr, B.aLo, B.aHi, warn, 'ADR');
+  comps.forEach((h) => { adr[h.id] = adrOut[h.id] != null ? adrOut[h.id] : freeMeanAdr; });
+
+  const cSold = comps.reduce((s, h) => s + (h.rooms || 0) * (occ[h.id] || 0) / 100, 0);
+  const cRev = comps.reduce((s, h) => s + (h.rooms || 0) * (occ[h.id] || 0) / 100 * (adr[h.id] || 0), 0);
+  const aSold = cSold + subjSold, aRooms = roomsComps + roomsSubj, aRev = cRev + subjSoldU * adrS;
+  const blendOcc = aRooms > 0 ? aSold / aRooms * 100 : NaN;
+  const blendAdr = aSold > 0 ? aRev / aSold : NaN;
+  const tie = Math.abs(blendOcc - OCC) < 0.15 && Math.abs(blendAdr - ADR) < 0.15;
+  return { occ, adr, warn, tie, blendOcc, blendAdr };
+}
+
+/* ---------- derived rows + grid range ---------- */
+export function computeRows(sol: Solution, m: MonthData, hotels: Hotel[]): Rows {
+  const D = monthDays(m), OCC = m.occ.compSet, ADR = m.adr.compSet, RP = m.revpar.compSet;
+  const hs: HotelRow[] = hotels.map((h) => {
+    const o = sol.occ[h.id] || 0, a = sol.adr[h.id] || 0;
+    const av = (h.rooms || 0) * D, sold = av * o / 100, rev = sold * a, rp = o / 100 * a;
+    const oi = h.isSubject && isFinite(m.occ.index) ? m.occ.index : (OCC ? o / OCC * 100 : NaN);
+    const ai = h.isSubject && isFinite(m.adr.index) ? m.adr.index : (ADR ? a / ADR * 100 : NaN);
+    return {
+      id: h.id, name: h.name, isSubject: h.isSubject, rooms: (h.rooms || 0),
+      avail: av, occ: o, sold, adr: a, rev, revpar: rp,
+      occIdx: oi, adrIdx: ai, rpi: RP ? rp / RP * 100 : NaN,
+      occRk: 0, adrRk: 0, rgiRk: 0,
+    };
+  });
+  hs.slice().sort((a, b) => b.occ - a.occ).forEach((h, i) => { h.occRk = i + 1; });
+  hs.slice().sort((a, b) => b.adr - a.adr).forEach((h, i) => { h.adrRk = i + 1; });
+  hs.slice().sort((a, b) => b.revpar - a.revpar).forEach((h, i) => { h.rgiRk = i + 1; });
+
+  const rmAll = hs.reduce((s, h) => s + h.rooms, 0);
+  const strAvail = rmAll * D, strSold = strAvail * OCC / 100, strRev = strSold * ADR;
+  const strRow: StrRow = {
+    label: 'Comp set · STR (incl. you)', rooms: rmAll, avail: strAvail,
+    occ: OCC, sold: strSold, adr: ADR, rev: strRev, revpar: RP, idx: true,
+  };
+  return { hs, strRow, D };
+}
+
+export function idxRange(rows: Rows) {
+  const subj = rows.hs.find((h) => h.isSubject);
+  const sx = subj && isFinite(subj.occIdx) ? subj.occIdx : 100;
+  const sy = subj && isFinite(subj.adrIdx) ? subj.adrIdx : 100;
+  const half = (vals: number[], center: number) => {
+    const f = vals.filter(isFinite);
+    const dev = f.reduce((mx, v) => Math.max(mx, Math.abs(v - center)), 0);
+    return Math.max(dev * 1.18, 12);
+  };
+  return { hx: half(rows.hs.map((h) => h.occIdx), sx), hy: half(rows.hs.map((h) => h.adrIdx), sy), sx, sy };
+}
+
+/* ---------- initial hotel set from a parsed report ---------- */
+const HOTEL_DEFAULTS = {
+  pinOcc: '', pinAdr: '', rankOcc: '', rankAdr: '',
+  locked: false, lockOcc: null as number | null, lockAdr: null as number | null,
+};
+export function buildHotels(parsed: ParsedStar | null, roster: RosterEntry[]): Hotel[] {
+  const hotels: Hotel[] = [];
+  const subjN = norm(parsed && parsed.subjectName);
+  let id = 1;
+  if (roster.length) {
+    roster.forEach((r) => {
+      const isSub = !!(subjN && norm(r.name) === subjN);
+      hotels.push({ id: id++, name: r.name, rooms: r.rooms, isSubject: isSub, ...HOTEL_DEFAULTS });
+    });
+    if (!hotels.some((h) => h.isSubject) && hotels.length) {
+      hotels[0].isSubject = true;
+      hotels[0].name = (parsed && parsed.subjectName) || hotels[0].name;
+    }
+  } else {
+    hotels.push({ id: id++, name: (parsed && parsed.subjectName) || 'Your property', rooms: '', isSubject: true, ...HOTEL_DEFAULTS });
+    for (let k = 2; k <= 5; k++)
+      hotels.push({ id: id++, name: 'Competitor ' + k, rooms: '', isSubject: false, ...HOTEL_DEFAULTS });
+  }
+  return hotels;
 }
