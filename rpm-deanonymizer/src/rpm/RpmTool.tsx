@@ -329,13 +329,8 @@ export default function RpmTool() {
             </select>
             <button className="set-base-btn" onClick={openBase} disabled={roster.length === 0}
               title="Set default starting ranks for unsaved months">Set Comp Base</button>
-            <button
-              className={`lock-month ${monthLocked ? 'on' : ''}`}
-              title={monthLocked ? 'Unlock month' : 'Lock month as solved'}
-              onClick={toggleMonthLock}
-            >
-              {monthLocked ? '🔒' : '🔓'}
-            </button>
+            <UploadStar onLoaded={onLoaded} summary={uploadSummary} />
+            
             {conflicts.length > 0 && (
               <button className="conflict-badge" title={`${conflicts.length} month(s) differ from a previous upload`}
                 onClick={() => setShowConflicts((v) => !v)}>⚠ {conflicts.length}</button>
