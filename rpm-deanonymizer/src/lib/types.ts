@@ -9,3 +9,10 @@ export interface UserProfile {
   properties: string[];
   createdAt: number;
 }
+
+export interface Property {
+  id: string;
+  orgId: string;
+  name: string;
+  createdAt: number;
+}
