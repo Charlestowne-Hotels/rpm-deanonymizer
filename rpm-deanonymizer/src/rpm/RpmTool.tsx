@@ -10,7 +10,9 @@ import {
   getProperty, loadMonthState, saveMonthState,
   loadReportLibrary, saveUploadedReport, listConflicts,
   resolveKeepStored, resolveUseUploaded,
+  loadCompBase, saveCompBase,
 } from '../lib/rpm/persistence';
+import type { CompBase } from '../lib/rpm/persistence';
 import type { Hotel, Bounds, ParsedStar, RosterEntry, MonthData, MonthState } from '../lib/rpm/types';
 import type { Property } from '../lib/types';
 
@@ -57,6 +59,11 @@ export default function RpmTool() {
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [showConflicts, setShowConflicts] = useState(false);
 
+  const [compBase, setCompBase] = useState<CompBase>({});
+  const [showBase, setShowBase] = useState(false);
+  const [baseDraft, setBaseDraft] = useState<CompBase>({});
+  const [savingBase, setSavingBase] = useState(false);
+
   const [saveLabel, setSaveLabel] = useState('Save');
   const [toolErr, setToolErr] = useState('');
 
@@ -64,7 +71,8 @@ export default function RpmTool() {
   const sol = useMemo(() => (month ? solve(month, hotels, bounds) : null), [month, hotels, bounds]);
   const rows = useMemo(() => (sol && month ? computeRows(sol, month, hotels) : null), [sol, month, hotels]);
 
-  function applyLoaded(state: MonthState | null, fresh: Hotel[], m: MonthData) {
+  // Apply saved state if present; otherwise seed fresh hotels from compBase ranks.
+  function applyLoaded(state: MonthState | null, fresh: Hotel[], m: MonthData, base: CompBase) {
     if (state) {
       setBounds({ oLo: +state.limits.oLo, oHi: +state.limits.oHi, aLo: +state.limits.aLo, aHi: +state.limits.aHi });
       setZoom(state.limits.zoom || 0.7);
@@ -84,11 +92,16 @@ export default function RpmTool() {
       setBounds(defaultBounds(m));
       setZoom(0.7);
       setMonthLocked(false);
-      setHotels(fresh);
+      // No saved data → seed competitor starting ranks from comp base.
+      setHotels(fresh.map((h) => {
+        if (h.isSubject) return h;
+        const b = base[norm(h.name)];
+        if (!b) return h;
+        return { ...h, rankOcc: b.rankOcc || '', rankAdr: b.rankAdr || '' };
+      }));
     }
   }
 
-  // Open property: load metadata, stored report library, and conflict flags.
   useEffect(() => {
     let live = true;
     (async () => {
@@ -101,6 +114,9 @@ export default function RpmTool() {
         if (!p) { setPropErr('Property not found, or you do not have access to it.'); setProperty(null); return; }
         setProperty(p);
 
+        const base = await loadCompBase(propertyId);
+        if (live) setCompBase(base);
+
         const lib = await loadReportLibrary(propertyId);
         if (!live) return;
         if (lib) {
@@ -112,7 +128,7 @@ export default function RpmTool() {
           const fresh = buildHotels(lib.parsed, lib.roster);
           const state = await loadMonthState(propertyId, newKey);
           if (!live) return;
-          applyLoaded(state, fresh, m);
+          applyLoaded(state, fresh, m, base);
           setMonthKey(newKey);
         }
         const cf = await listConflicts(propertyId);
@@ -126,7 +142,6 @@ export default function RpmTool() {
     return () => { live = false; };
   }, [propertyId]);
 
-  // Upload: accumulate into the stored library, then reload from storage.
   const onLoaded = async (p: ParsedStar, r: RosterEntry[]) => {
     setToolErr('');
     setUploadInfo(null);
@@ -144,7 +159,7 @@ export default function RpmTool() {
         const m = lib.parsed.byMonth[newKey];
         const fresh = buildHotels(lib.parsed, lib.roster);
         const state = await loadMonthState(propertyId, newKey);
-        applyLoaded(state, fresh, m);
+        applyLoaded(state, fresh, m, compBase);
         setMonthKey(newKey);
       }
       const parts: string[] = [];
@@ -164,7 +179,7 @@ export default function RpmTool() {
     const fresh = buildHotels(parsed, roster);
     let state: MonthState | null = null;
     try { state = await loadMonthState(propertyId, newKey); } catch { /* none */ }
-    applyLoaded(state, fresh, m);
+    applyLoaded(state, fresh, m, compBase);
     setMonthKey(newKey);
   };
 
@@ -226,6 +241,44 @@ export default function RpmTool() {
     } catch (e) { setToolErr(e instanceof Error ? e.message : 'Resolve failed'); }
   };
 
+  // ----- comp base popup -----
+  const openBase = () => {
+    const draft: CompBase = {};
+    roster
+      .filter((r) => norm(r.name) !== norm(parsed?.subjectName))
+      .forEach((r) => {
+        const key = norm(r.name);
+        draft[key] = compBase[key] || { rankOcc: '', rankAdr: '' };
+      });
+    setBaseDraft(draft);
+    setShowBase(true);
+  };
+  const setBaseField = (key: string, field: 'rankOcc' | 'rankAdr', value: string) =>
+    setBaseDraft((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
+  const saveBase = async () => {
+    if (!propertyId) return;
+    setSavingBase(true);
+    try {
+      await saveCompBase(propertyId, baseDraft);
+      setCompBase(baseDraft);
+      // If the current month has no saved pins, reflect the new base immediately.
+      if (!monthLocked) {
+        setHotels((prev) => prev.map((h) => {
+          if (h.isSubject) return h;
+          const b = baseDraft[norm(h.name)];
+          if (!b) return h;
+          const blank = h.rankOcc === '' && h.rankAdr === '' && h.pinOcc === '' && h.pinAdr === '' && !h.locked;
+          return blank ? { ...h, rankOcc: b.rankOcc || '', rankAdr: b.rankAdr || '' } : h;
+        }));
+      }
+      setShowBase(false);
+    } catch (e) {
+      setToolErr(e instanceof Error ? e.message : 'Could not save comp base');
+    } finally {
+      setSavingBase(false);
+    }
+  };
+
   const onField = (id: number, field: keyof Hotel, value: string) =>
     setHotels((prev) => prev.map((h) => (h.id === id ? ({ ...h, [field]: value } as Hotel) : h)));
   const onRooms = (id: number, value: string) =>
@@ -275,6 +328,8 @@ export default function RpmTool() {
             <select className="month-select" value={monthKey} onChange={(e) => onMonthChange(e.target.value)}>
               {parsed.order.slice().reverse().map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
+            <button className="set-base-btn" onClick={openBase} disabled={roster.length === 0}
+              title="Set default starting ranks for unsaved months">Set Comp Base</button>
             <button
               className={`lock-month ${monthLocked ? 'on' : ''}`}
               title={monthLocked ? 'Unlock month' : 'Lock month as solved'}
@@ -283,13 +338,8 @@ export default function RpmTool() {
               {monthLocked ? '🔒' : '🔓'}
             </button>
             {conflicts.length > 0 && (
-              <button
-                className="conflict-badge"
-                title={`${conflicts.length} month(s) differ from a previous upload`}
-                onClick={() => setShowConflicts((v) => !v)}
-              >
-                ⚠ {conflicts.length}
-              </button>
+              <button className="conflict-badge" title={`${conflicts.length} month(s) differ from a previous upload`}
+                onClick={() => setShowConflicts((v) => !v)}>⚠ {conflicts.length}</button>
             )}
             <span style={{ marginLeft: 'auto' }} />
             <button className="btn" onClick={onSave} disabled={saveLabel !== 'Save'}>{saveLabel}</button>
@@ -302,7 +352,6 @@ export default function RpmTool() {
               <div className="section-title">Report conflicts</div>
               <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
                 A later upload had different numbers for these months. The stored values were kept.
-                Choose to keep them or replace with the uploaded values.
               </p>
               {conflicts.map((k) => (
                 <div className="conflict-row" key={k}>
@@ -318,15 +367,9 @@ export default function RpmTool() {
 
           <div style={{ marginTop: 14 }}>
             <HotelTable
-              hotels={hotels}
-              rows={rows}
-              month={month}
-              monthLocked={monthLocked}
-              onField={onField}
-              onRooms={onRooms}
-              onName={onName}
-              onToggleLock={onToggleLock}
-              onDelete={onDelete}
+              hotels={hotels} rows={rows} month={month} monthLocked={monthLocked}
+              onField={onField} onRooms={onRooms} onName={onName}
+              onToggleLock={onToggleLock} onDelete={onDelete}
             />
           </div>
 
@@ -344,6 +387,41 @@ export default function RpmTool() {
 
           <LimitsPanel bounds={bounds} zoom={zoom} disabled={false} onBounds={setBounds} onZoom={setZoom} />
         </>
+      )}
+
+      {showBase && (
+        <div className="modal-backdrop" onClick={() => setShowBase(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>Set Comp Base</h3>
+              <p>Default starting Occ &amp; ADR ranks for each competitor. Applied only to months with no saved data.</p>
+            </div>
+            <div className="modal-body">
+              <div className="cb-head"><span className="cb-name">Competitor</span><span className="col">Occ Rk</span><span className="col">ADR Rk</span></div>
+              {Object.keys(baseDraft).length === 0 ? (
+                <p className="muted">No competitors in the stored roster yet — upload a report first.</p>
+              ) : roster
+                .filter((r) => norm(r.name) !== norm(parsed?.subjectName))
+                .map((r) => {
+                  const key = norm(r.name);
+                  const e = baseDraft[key] || { rankOcc: '', rankAdr: '' };
+                  return (
+                    <div className="cb-row" key={key}>
+                      <span className="cb-name">{r.name}</span>
+                      <input type="number" value={e.rankOcc} placeholder="–" onChange={(ev) => setBaseField(key, 'rankOcc', ev.target.value)} />
+                      <input type="number" value={e.rankAdr} placeholder="–" onChange={(ev) => setBaseField(key, 'rankAdr', ev.target.value)} />
+                    </div>
+                  );
+                })}
+            </div>
+            <div className="modal-foot">
+              <button className="btn" onClick={() => setShowBase(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveBase} disabled={savingBase}>
+                {savingBase ? 'Saving…' : 'Save base'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
