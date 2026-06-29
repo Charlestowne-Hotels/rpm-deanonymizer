@@ -2,6 +2,7 @@ import { Routes, Route, Navigate, Link, useParams } from 'react-router-dom';
 import { useState } from 'react';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './components/AppLayout';
+import AdminPanel from './admin/AdminPanel';
 import { useAuth, hasAccess } from './auth/AuthContext';
 
 function Landing() {
@@ -19,9 +20,7 @@ function Landing() {
           Upload your Monthly STAR report and reverse-engineer competitor occupancy, ADR,
           and RevPAR — anchored to your property and tied out to the STR totals.
         </p>
-        <Link className="btn btn-primary" to="/login" style={{ textDecoration: 'none' }}>
-          Get started
-        </Link>
+        <Link className="btn btn-primary" to="/login" style={{ textDecoration: 'none' }}>Get started</Link>
       </div>
     </div>
   );
@@ -117,27 +116,11 @@ function PropertySelect() {
       </div>
       <div className="card">
         <p className="muted" style={{ margin: 0 }}>
-          The property list and selection land in Phase 3. For now, the tool opens via a direct link.
+          The property list and selection land in Phase 4. For now, the tool opens via a direct link.
         </p>
         <Link className="btn" to="/app/properties/demo" style={{ marginTop: 12, display: 'inline-block', textDecoration: 'none' }}>
           Open demo property →
         </Link>
-      </div>
-    </div>
-  );
-}
-
-function AdminHome() {
-  const { profile } = useAuth();
-  if (profile?.role !== 'admin') return <Navigate to="/app" replace />;
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1 className="page-title">Admin</h1>
-        <p className="page-sub">Users, properties, and access assignment.</p>
-      </div>
-      <div className="card">
-        <p className="muted" style={{ margin: 0 }}>The admin panel is built in Phase 3.</p>
       </div>
     </div>
   );
@@ -169,7 +152,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="properties" element={<PropertySelect />} />
         <Route path="properties/:propertyId" element={<Tool />} />
-        <Route path="admin" element={<AdminHome />} />
+        <Route path="admin" element={<AdminPanel />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
