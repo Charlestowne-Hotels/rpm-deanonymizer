@@ -1,18 +1,28 @@
 import { Routes, Route, Navigate, Link, useParams } from 'react-router-dom';
 import { useState } from 'react';
 import ProtectedRoute from './components/ProtectedRoute';
+import AppLayout from './components/AppLayout';
 import { useAuth, hasAccess } from './auth/AuthContext';
 
 function Landing() {
   return (
-    <div className="wrap" style={{ paddingTop: 80 }}>
-      <h1 style={{ fontSize: 34, fontWeight: 800, letterSpacing: '-.02em' }}>RPM De-Anonymizer</h1>
-      <p style={{ color: 'var(--mut)', maxWidth: '52ch' }}>
-        Reverse-engineer competitor performance from your Monthly STAR report.
-      </p>
-      <Link className="btn btn-primary" to="/login" style={{ display: 'inline-block', marginTop: 16, textDecoration: 'none' }}>
-        Sign in
-      </Link>
+    <div className="landing">
+      <div className="landing-top">
+        <span className="brand-mark"><i /><i /></span>
+        <span className="brand-name">RPM De-Anonymizer</span>
+        <span className="spacer" />
+        <Link className="btn" to="/login" style={{ textDecoration: 'none' }}>Sign in</Link>
+      </div>
+      <div className="landing-hero">
+        <h1>See past the anonymized comp set.</h1>
+        <p>
+          Upload your Monthly STAR report and reverse-engineer competitor occupancy, ADR,
+          and RevPAR — anchored to your property and tied out to the STR totals.
+        </p>
+        <Link className="btn btn-primary" to="/login" style={{ textDecoration: 'none' }}>
+          Get started
+        </Link>
+      </div>
     </div>
   );
 }
@@ -35,11 +45,15 @@ function Login() {
   };
 
   return (
-    <div className="wrap" style={{ paddingTop: 80, maxWidth: 420 }}>
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>Sign in</h2>
-        <p style={{ color: 'var(--mut)' }}>Use your Google account to continue.</p>
-        <button className="btn btn-primary" onClick={onSignIn} disabled={loading}>
+    <div className="auth-shell">
+      <div className="auth-card card">
+        <div className="auth-brand">
+          <span className="brand-mark"><i /><i /></span>
+          <span>RPM De-Anonymizer</span>
+        </div>
+        <h2 style={{ marginTop: 0, marginBottom: 6 }}>Sign in</h2>
+        <p className="muted" style={{ marginTop: 0 }}>Use your Google account to continue.</p>
+        <button className="btn btn-primary" onClick={onSignIn} disabled={loading} style={{ width: '100%' }}>
           {loading ? 'Working…' : 'Continue with Google'}
         </button>
         {err && <p style={{ color: 'var(--red)', fontSize: 13, marginTop: 12 }}>{err}</p>}
@@ -54,12 +68,12 @@ function NoAccess() {
   if (!loading && hasAccess(profile)) return <Navigate to="/app" replace />;
 
   return (
-    <div className="wrap" style={{ paddingTop: 80, maxWidth: 460 }}>
-      <div className="card">
+    <div className="auth-shell">
+      <div className="auth-card card">
         <h2 style={{ marginTop: 0 }}>No access yet</h2>
-        <p style={{ color: 'var(--mut)' }}>
-          You're signed in{profile?.email ? ` as ${profile.email}` : ''}, but no properties have been
-          assigned to your account. Ask an administrator to grant you access.
+        <p className="muted">
+          You're signed in{profile?.email ? ` as ${profile.email}` : ''}, but no properties have
+          been assigned to your account. Ask an administrator to grant you access.
         </p>
         <button className="btn" onClick={() => signOut()}>Sign out</button>
       </div>
@@ -68,26 +82,63 @@ function NoAccess() {
 }
 
 function Dashboard() {
-  const { profile, signOut } = useAuth();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
+  const first = (profile?.displayName || profile?.email || '').split(' ')[0];
+
   return (
-    <div className="wrap" style={{ paddingTop: 40 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>Dashboard</h2>
-        <button className="btn" onClick={() => signOut()}>Sign out</button>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">Welcome{first ? `, ${first}` : ''}</h1>
+        <p className="page-sub">What would you like to work on?</p>
       </div>
-      <p style={{ color: 'var(--mut)' }}>
-        Signed in as {profile?.displayName || profile?.email} · role: <b>{profile?.role}</b>
-      </p>
-      <Link className="btn" to="/app/properties">Select a property →</Link>
+      <div className="card-grid">
+        <Link className="tile" to="/app/properties">
+          <p className="tile-title">Properties →</p>
+          <p className="tile-desc">Open a property and work the RPM tool for a STAR month.</p>
+        </Link>
+        {isAdmin && (
+          <Link className="tile" to="/app/admin">
+            <p className="tile-title">Admin →</p>
+            <p className="tile-desc">Manage users, create properties, and assign access.</p>
+          </Link>
+        )}
+      </div>
     </div>
   );
 }
 
 function PropertySelect() {
   return (
-    <div className="wrap" style={{ paddingTop: 40 }}>
-      <h2>Properties</h2>
-      <Link className="btn" to="/app/properties/demo">Open demo property →</Link>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">Properties</h1>
+        <p className="page-sub">Properties you've been assigned will appear here.</p>
+      </div>
+      <div className="card">
+        <p className="muted" style={{ margin: 0 }}>
+          The property list and selection land in Phase 3. For now, the tool opens via a direct link.
+        </p>
+        <Link className="btn" to="/app/properties/demo" style={{ marginTop: 12, display: 'inline-block', textDecoration: 'none' }}>
+          Open demo property →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function AdminHome() {
+  const { profile } = useAuth();
+  if (profile?.role !== 'admin') return <Navigate to="/app" replace />;
+  return (
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">Admin</h1>
+        <p className="page-sub">Users, properties, and access assignment.</p>
+      </div>
+      <div className="card">
+        <p className="muted" style={{ margin: 0 }}>The admin panel is built in Phase 3.</p>
+      </div>
     </div>
   );
 }
@@ -95,9 +146,14 @@ function PropertySelect() {
 function Tool() {
   const { propertyId } = useParams();
   return (
-    <div className="wrap" style={{ paddingTop: 40 }}>
-      <h2>RPM Tool</h2>
-      <p style={{ color: 'var(--mut)' }}>Property: {propertyId}. The ported tool lands in Phase 4.</p>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">RPM Tool</h1>
+        <p className="page-sub">Property: {propertyId}</p>
+      </div>
+      <div className="card">
+        <p className="muted" style={{ margin: 0 }}>The ported RPM tool lands in Phase 4.</p>
+      </div>
     </div>
   );
 }
@@ -108,9 +164,14 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/no-access" element={<NoAccess />} />
-      <Route path="/app" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/app/properties" element={<ProtectedRoute><PropertySelect /></ProtectedRoute>} />
-      <Route path="/app/properties/:propertyId" element={<ProtectedRoute><Tool /></ProtectedRoute>} />
+
+      <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+        <Route index element={<Dashboard />} />
+        <Route path="properties" element={<PropertySelect />} />
+        <Route path="properties/:propertyId" element={<Tool />} />
+        <Route path="admin" element={<AdminHome />} />
+      </Route>
+
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
