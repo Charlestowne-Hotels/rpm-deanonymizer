@@ -4,10 +4,10 @@ import { parseStarComp, parseResponse } from '../../lib/rpm/parse';
 import type { ParsedStar, RosterEntry } from '../../lib/rpm/types';
 
 interface Props {
-  onLoaded: (parsed: ParsedStar, roster: RosterEntry[]) => void;
-  summary: string | null;
+  onLoaded: (parsed: ParsedStar, roster: RosterEntry[]) => void | Promise<void>;
+  summary?: string | null;
+  label?: string;
 }
-
 export default function UploadStar({ onLoaded, summary }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [err, setErr] = useState('');
