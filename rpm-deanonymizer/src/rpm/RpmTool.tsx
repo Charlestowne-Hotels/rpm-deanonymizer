@@ -57,7 +57,7 @@ export default function RpmTool() {
   const [conflicts, setConflicts] = useState<string[]>([]);
   const [showConflicts, setShowConflicts] = useState(false);
 
-  const [saveLabel, setSaveLabel] = useState('Save Config');
+  const [saveLabel, setSaveLabel] = useState('Save');
   const [toolErr, setToolErr] = useState('');
 
   const month: MonthData | null = parsed && monthKey ? (parsed.byMonth[monthKey] ?? null) : null;
@@ -174,10 +174,10 @@ export default function RpmTool() {
     try {
       await saveMonthState(propertyId, monthKey, buildMonthState(hotels, bounds, zoom, monthLocked));
       setSaveLabel('Saved!');
-      setTimeout(() => setSaveLabel('Save Config'), 2000);
+      setTimeout(() => setSaveLabel('Save'), 2000);
     } catch (e) {
       setToolErr(e instanceof Error ? e.message : 'Save failed');
-      setSaveLabel('Save Config');
+      setSaveLabel('Save');
     }
   };
 
@@ -292,7 +292,7 @@ export default function RpmTool() {
               </button>
             )}
             <span style={{ marginLeft: 'auto' }} />
-            <button className="btn" onClick={onSave} disabled={saveLabel !== 'Save Config'}>{saveLabel}</button>
+            <button className="btn" onClick={onSave} disabled={saveLabel !== 'Save'}>{saveLabel}</button>
             <button className="btn" onClick={onClear} disabled={monthLocked}>Clear pins</button>
             <button className="btn" onClick={onPdf} disabled={!rows}>Export PDF</button>
           </div>
