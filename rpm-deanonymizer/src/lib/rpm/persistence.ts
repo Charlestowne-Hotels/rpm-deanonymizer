@@ -3,10 +3,10 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Property, UserProfile } from '../types';
-import type { MonthState, MonthData, ParsedStar } from './types';
+import type { MonthState, MonthData, ParsedStar, RosterEntry } from './types';
 import { MON } from './types';
 
-/* ============ properties access (unchanged) ============ */
+/* ============ properties access ============ */
 export async function listAccessibleProperties(profile: UserProfile): Promise<Property[]> {
   if (profile.role === 'admin') {
     const snap = await getDocs(query(collection(db, 'properties'), where('orgId', '==', profile.orgId)));
@@ -31,11 +31,6 @@ export async function getProperty(propertyId: string): Promise<Property | null> 
 }
 
 /* ============ per-month WORKING STATE ============ */
-
-/**
- * Returns saved working state only. A month doc that holds a report but no
- * saved pins (hotels) returns null, so the tool falls back to defaults.
- */
 export async function loadMonthState(propertyId: string, monthKey: string): Promise<MonthState | null> {
   const s = await getDoc(doc(db, 'properties', propertyId, 'months', monthKey));
   if (!s.exists()) return null;
@@ -44,46 +39,45 @@ export async function loadMonthState(propertyId: string, monthKey: string): Prom
   return { locked: !!data.locked, limits: data.limits!, hotels: data.hotels };
 }
 
-/**
- * Save working state. MERGE so report fields in the same doc survive.
- */
+/** Save working state. MERGE so report/roster fields in the same doc survive. */
 export async function saveMonthState(propertyId: string, monthKey: string, state: MonthState): Promise<void> {
   await setDoc(doc(db, 'properties', propertyId, 'months', monthKey), state, { merge: true });
 }
 
 /* ============ accumulated REPORT library ============ */
-
 interface MonthDoc {
   report?: MonthData;
   subjectName?: string;
+  roster?: RosterEntry[];
   reportConflict?: boolean;
   reportConflictWith?: MonthData;
 }
 
-export interface ConflictInfo { monthKey: string; }
+export interface ReportBundle { parsed: ParsedStar; roster: RosterEntry[]; }
 export interface UploadResult { added: string[]; conflicts: string[]; unchanged: string[]; }
 
 const sortKey = (m: MonthData) => m.year * 100 + MON.indexOf(m.month);
 
-/** Reconstruct a ParsedStar from stored month docs. Null if no report stored yet. */
-export async function loadReportLibrary(propertyId: string): Promise<ParsedStar | null> {
+/** Rebuild the accumulated report + roster from stored month docs. Null if nothing stored. */
+export async function loadReportLibrary(propertyId: string): Promise<ReportBundle | null> {
   const snap = await getDocs(collection(db, 'properties', propertyId, 'months'));
   const byMonth: Record<string, MonthData> = {};
   let subjectName: string | null = null;
+  let roster: RosterEntry[] = [];
   snap.docs.forEach((d) => {
     const data = d.data() as MonthDoc;
     if (data.report) {
       byMonth[d.id] = data.report;
       if (!subjectName && data.subjectName) subjectName = data.subjectName;
+      if (roster.length === 0 && Array.isArray(data.roster) && data.roster.length) roster = data.roster;
     }
   });
   const keys = Object.keys(byMonth);
   if (keys.length === 0) return null;
   const order = keys.sort((a, b) => sortKey(byMonth[a]) - sortKey(byMonth[b]));
-  return { subjectName, order, byMonth };
+  return { parsed: { subjectName, order, byMonth }, roster };
 }
 
-/** Which months currently carry an unresolved conflict flag. */
 export async function listConflicts(propertyId: string): Promise<string[]> {
   const snap = await getDocs(collection(db, 'properties', propertyId, 'months'));
   return snap.docs.filter((d) => (d.data() as MonthDoc).reportConflict).map((d) => d.id);
@@ -104,11 +98,12 @@ function reportsDiffer(a: MonthData, b: MonthData): boolean {
 }
 
 /**
- * Accumulate an uploaded report. KEEP EXISTING months; for any month already
- * stored, if the upload's numbers differ, flag a conflict (and stash the
- * uploaded values for later review) without overwriting the stored report.
+ * Accumulate an uploaded report. KEEP EXISTING months; new months store the
+ * report + roster; existing months whose numbers differ get flagged (not overwritten).
  */
-export async function saveUploadedReport(propertyId: string, parsed: ParsedStar): Promise<UploadResult> {
+export async function saveUploadedReport(
+  propertyId: string, parsed: ParsedStar, roster: RosterEntry[],
+): Promise<UploadResult> {
   const existingSnap = await getDocs(collection(db, 'properties', propertyId, 'months'));
   const existing = new Map<string, MonthDoc>();
   existingSnap.docs.forEach((d) => existing.set(d.id, d.data() as MonthDoc));
@@ -122,7 +117,7 @@ export async function saveUploadedReport(propertyId: string, parsed: ParsedStar)
     const ref = doc(db, 'properties', propertyId, 'months', key);
     const prior = existing.get(key);
     if (!prior || !prior.report) {
-      batch.set(ref, { report: incoming, subjectName }, { merge: true });
+      batch.set(ref, { report: incoming, subjectName, roster }, { merge: true });
       added.push(key);
     } else if (reportsDiffer(prior.report, incoming)) {
       batch.set(ref, { reportConflict: true, reportConflictWith: incoming }, { merge: true });
@@ -136,13 +131,11 @@ export async function saveUploadedReport(propertyId: string, parsed: ParsedStar)
   return { added, conflicts, unchanged };
 }
 
-/** Resolve a conflict by KEEPING the stored report (just clears the flag). */
 export async function resolveKeepStored(propertyId: string, monthKey: string): Promise<void> {
   await setDoc(doc(db, 'properties', propertyId, 'months', monthKey),
     { reportConflict: deleteField(), reportConflictWith: deleteField() }, { merge: true });
 }
 
-/** Resolve by REPLACING the stored report with the uploaded values. */
 export async function resolveUseUploaded(propertyId: string, monthKey: string): Promise<void> {
   const ref = doc(db, 'properties', propertyId, 'months', monthKey);
   const s = await getDoc(ref);
