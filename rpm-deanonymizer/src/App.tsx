@@ -1,9 +1,10 @@
-import { Routes, Route, Navigate, Link, useParams } from 'react-router-dom';
+import { Routes, Route, Navigate, Link } from 'react-router-dom';
 import { useState } from 'react';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './components/AppLayout';
 import AdminPanel from './admin/AdminPanel';
 import PropertiesScreen from './rpm/PropertiesScreen';
+import RpmTool from './rpm/RpmTool';
 import { useAuth, hasAccess } from './auth/AuthContext';
 
 function Landing() {
@@ -108,21 +109,6 @@ function Dashboard() {
   );
 }
 
-function Tool() {
-  const { propertyId } = useParams();
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1 className="page-title">RPM Tool</h1>
-        <p className="page-sub">Property: {propertyId}</p>
-      </div>
-      <div className="card">
-        <p className="muted" style={{ margin: 0 }}>The ported RPM tool lands in Phase 4d.</p>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <Routes>
@@ -133,7 +119,7 @@ export default function App() {
       <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         <Route path="properties" element={<PropertiesScreen />} />
-        <Route path="properties/:propertyId" element={<Tool />} />
+        <Route path="properties/:propertyId" element={<RpmTool />} />
         <Route path="admin" element={<AdminPanel />} />
       </Route>
 
