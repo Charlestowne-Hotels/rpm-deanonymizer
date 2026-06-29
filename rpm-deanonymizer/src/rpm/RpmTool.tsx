@@ -6,7 +6,11 @@ import PositioningGrid from './components/PositioningGrid';
 import LimitsPanel from './components/LimitsPanel';
 import { solve, computeRows, buildHotels, norm } from '../lib/rpm/solver';
 import { drawPdf } from '../lib/rpm/pdf';
-import { getProperty, loadMonthState, saveMonthState } from '../lib/rpm/persistence';
+import {
+  getProperty, loadMonthState, saveMonthState,
+  loadReportLibrary, saveUploadedReport, listConflicts,
+  resolveKeepStored, resolveUseUploaded,
+} from '../lib/rpm/persistence';
 import type { Hotel, Bounds, ParsedStar, RosterEntry, MonthData, MonthState } from '../lib/rpm/types';
 import type { Property } from '../lib/types';
 
@@ -42,6 +46,7 @@ export default function RpmTool() {
   const [parsed, setParsed] = useState<ParsedStar | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [uploadSummary, setUploadSummary] = useState<string | null>(null);
+  const [uploadInfo, setUploadInfo] = useState<string | null>(null);
 
   const [monthKey, setMonthKey] = useState('');
   const [hotels, setHotels] = useState<Hotel[]>([]);
@@ -49,32 +54,15 @@ export default function RpmTool() {
   const [zoom, setZoom] = useState(0.7);
   const [monthLocked, setMonthLocked] = useState(false);
 
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  const [showConflicts, setShowConflicts] = useState(false);
+
   const [saveLabel, setSaveLabel] = useState('Save Config');
   const [toolErr, setToolErr] = useState('');
 
   const month: MonthData | null = parsed && monthKey ? (parsed.byMonth[monthKey] ?? null) : null;
   const sol = useMemo(() => (month ? solve(month, hotels, bounds) : null), [month, hotels, bounds]);
   const rows = useMemo(() => (sol && month ? computeRows(sol, month, hotels) : null), [sol, month, hotels]);
-
-  useEffect(() => {
-    let live = true;
-    (async () => {
-      if (!propertyId) return;
-      setLoadingProp(true);
-      setPropErr('');
-      try {
-        const p = await getProperty(propertyId);
-        if (!live) return;
-        if (!p) setPropErr('Property not found, or you do not have access to it.');
-        setProperty(p);
-      } catch (e) {
-        if (live) setPropErr(e instanceof Error ? e.message : 'Failed to load property');
-      } finally {
-        if (live) setLoadingProp(false);
-      }
-    })();
-    return () => { live = false; };
-  }, [propertyId]);
 
   function applyLoaded(state: MonthState | null, fresh: Hotel[], m: MonthData) {
     if (state) {
@@ -100,20 +88,73 @@ export default function RpmTool() {
     }
   }
 
+  // Open property: load metadata, stored report library, and conflict flags.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!propertyId) return;
+      setLoadingProp(true);
+      setPropErr('');
+      try {
+        const p = await getProperty(propertyId);
+        if (!live) return;
+        if (!p) { setPropErr('Property not found, or you do not have access to it.'); setProperty(null); return; }
+        setProperty(p);
+
+        const lib = await loadReportLibrary(propertyId);
+        if (!live) return;
+        if (lib) {
+          setParsed(lib.parsed);
+          setRoster(lib.roster);
+          setUploadSummary(`${lib.parsed.subjectName || 'Stored report'} · ${lib.parsed.order.length} months (stored)`);
+          const newKey = lib.parsed.order[lib.parsed.order.length - 1];
+          const m = lib.parsed.byMonth[newKey];
+          const fresh = buildHotels(lib.parsed, lib.roster);
+          const state = await loadMonthState(propertyId, newKey);
+          if (!live) return;
+          applyLoaded(state, fresh, m);
+          setMonthKey(newKey);
+        }
+        const cf = await listConflicts(propertyId);
+        if (live) setConflicts(cf);
+      } catch (e) {
+        if (live) setPropErr(e instanceof Error ? e.message : 'Failed to load property');
+      } finally {
+        if (live) setLoadingProp(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [propertyId]);
+
+  // Upload: accumulate into the stored library, then reload from storage.
   const onLoaded = async (p: ParsedStar, r: RosterEntry[]) => {
     setToolErr('');
-    setParsed(p);
-    setRoster(r);
-    setUploadSummary(`${p.subjectName || 'Loaded'} · ${p.order.length} months${r.length ? ` · ${r.length} hotels` : ''}`);
-    const newKey = p.order[p.order.length - 1];
-    const m = p.byMonth[newKey];
-    const fresh = buildHotels(p, r);
-    let state: MonthState | null = null;
-    if (propertyId) {
-      try { state = await loadMonthState(propertyId, newKey); } catch { /* none */ }
+    setUploadInfo(null);
+    if (!propertyId) return;
+    try {
+      const result = await saveUploadedReport(propertyId, p, r);
+      const lib = await loadReportLibrary(propertyId);
+      const cf = await listConflicts(propertyId);
+      setConflicts(cf);
+      if (lib) {
+        setParsed(lib.parsed);
+        setRoster(lib.roster);
+        setUploadSummary(`${lib.parsed.subjectName || 'Stored report'} · ${lib.parsed.order.length} months (stored)`);
+        const newKey = lib.parsed.order[lib.parsed.order.length - 1];
+        const m = lib.parsed.byMonth[newKey];
+        const fresh = buildHotels(lib.parsed, lib.roster);
+        const state = await loadMonthState(propertyId, newKey);
+        applyLoaded(state, fresh, m);
+        setMonthKey(newKey);
+      }
+      const parts: string[] = [];
+      if (result.added.length) parts.push(`${result.added.length} new month${result.added.length > 1 ? 's' : ''} added`);
+      if (result.unchanged.length) parts.push(`${result.unchanged.length} unchanged`);
+      if (result.conflicts.length) parts.push(`${result.conflicts.length} flagged (kept existing)`);
+      setUploadInfo(parts.join(' · ') || 'No months found in file.');
+    } catch (e) {
+      setToolErr(e instanceof Error ? e.message : 'Upload failed');
     }
-    applyLoaded(state, fresh, m);
-    setMonthKey(newKey);
   };
 
   const onMonthChange = async (newKey: string) => {
@@ -163,6 +204,28 @@ export default function RpmTool() {
     }
   };
 
+  async function refreshConflicts() {
+    if (!propertyId) return;
+    const cf = await listConflicts(propertyId);
+    setConflicts(cf);
+    if (cf.length === 0) setShowConflicts(false);
+  }
+
+  const keepStored = async (key: string) => {
+    if (!propertyId) return;
+    try { await resolveKeepStored(propertyId, key); await refreshConflicts(); }
+    catch (e) { setToolErr(e instanceof Error ? e.message : 'Resolve failed'); }
+  };
+  const useUploaded = async (key: string) => {
+    if (!propertyId) return;
+    try {
+      await resolveUseUploaded(propertyId, key);
+      const lib = await loadReportLibrary(propertyId);
+      if (lib) { setParsed(lib.parsed); setRoster(lib.roster); }
+      await refreshConflicts();
+    } catch (e) { setToolErr(e instanceof Error ? e.message : 'Resolve failed'); }
+  };
+
   const onField = (id: number, field: keyof Hotel, value: string) =>
     setHotels((prev) => prev.map((h) => (h.id === id ? ({ ...h, [field]: value } as Hotel) : h)));
   const onRooms = (id: number, value: string) =>
@@ -195,7 +258,7 @@ export default function RpmTool() {
         <h1 className="page-title">{property?.name || 'RPM Tool'}</h1>
         <p className="page-sub">
           {parsed
-            ? `${parsed.subjectName || 'Report'} · ${parsed.order.length} months loaded`
+            ? `${parsed.subjectName || 'Report'} · ${parsed.order.length} months`
             : 'Upload this property\u2019s Monthly STAR report to begin.'}
         </p>
       </div>
@@ -204,6 +267,7 @@ export default function RpmTool() {
       {toolErr && <div className="admin-err">{toolErr}</div>}
 
       <UploadStar onLoaded={onLoaded} summary={uploadSummary} />
+      {uploadInfo && <div className="upload-info">{uploadInfo}</div>}
 
       {parsed && month && (
         <>
@@ -218,11 +282,37 @@ export default function RpmTool() {
             >
               {monthLocked ? '🔒' : '🔓'}
             </button>
+            {conflicts.length > 0 && (
+              <button
+                className="conflict-badge"
+                title={`${conflicts.length} month(s) differ from a previous upload`}
+                onClick={() => setShowConflicts((v) => !v)}
+              >
+                ⚠ {conflicts.length}
+              </button>
+            )}
             <span style={{ marginLeft: 'auto' }} />
             <button className="btn" onClick={onSave} disabled={saveLabel !== 'Save Config'}>{saveLabel}</button>
             <button className="btn" onClick={onClear} disabled={monthLocked}>Clear pins</button>
             <button className="btn" onClick={onPdf} disabled={!rows}>Export PDF</button>
           </div>
+
+          {showConflicts && conflicts.length > 0 && (
+            <div className="card conflict-panel">
+              <div className="section-title">Report conflicts</div>
+              <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+                A later upload had different numbers for these months. The stored values were kept.
+                Choose to keep them or replace with the uploaded values.
+              </p>
+              {conflicts.map((k) => (
+                <div className="conflict-row" key={k}>
+                  <span className="conflict-month">{k}</span>
+                  <button className="btn" onClick={() => keepStored(k)}>Keep stored</button>
+                  <button className="btn" onClick={() => useUploaded(k)}>Use uploaded</button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {rows && <div style={{ marginTop: 14 }}><PositioningGrid rows={rows} zoom={zoom} /></div>}
 
@@ -252,13 +342,7 @@ export default function RpmTool() {
             </>
           )}
 
-          <LimitsPanel
-            bounds={bounds}
-            zoom={zoom}
-            disabled={false}
-            onBounds={setBounds}
-            onZoom={setZoom}
-          />
+          <LimitsPanel bounds={bounds} zoom={zoom} disabled={false} onBounds={setBounds} onZoom={setZoom} />
         </>
       )}
     </div>
