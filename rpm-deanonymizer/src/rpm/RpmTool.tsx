@@ -351,17 +351,7 @@ export default function RpmTool() {
             />
           </div>
 
-          {sol && (
-            <>
-              <div className={`recon ${sol.tie ? '' : 'off'}`}>
-                {(sol.tie ? '✓ ' : '⚠ ') +
-                  `Tie-out: all hotels blend to STR comp set ${month.occ.compSet.toFixed(1)}% · $${month.adr.compSet.toFixed(2)} · RevPAR $${month.revpar.compSet.toFixed(2)}` +
-                  (sol.tie ? '' :
-                    `  (currently ${sol.blendOcc != null && isFinite(sol.blendOcc) ? sol.blendOcc.toFixed(1) : '–'}% · $${sol.blendAdr != null && isFinite(sol.blendAdr) ? sol.blendAdr.toFixed(2) : '–'})`)}
-              </div>
-              {[...new Set(sol.warn)].map((w, i) => <div className="warn" key={i}>⚠ {w}</div>)}
-            </>
-          )}
+          {sol && [...new Set(sol.warn)].map((w, i) => <div className="warn" key={i}>⚠ {w}</div>)}
 
           <LimitsPanel bounds={bounds} zoom={zoom} disabled={false} onBounds={setBounds} onZoom={setZoom} />
         </>
