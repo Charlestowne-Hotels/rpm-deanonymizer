@@ -345,6 +345,7 @@ export default function RpmTool() {
           <div style={{ marginTop: 14 }}>
             <HotelTable
               hotels={hotels} rows={rows} month={month} monthLocked={monthLocked}
+              blendOcc={sol?.blendOcc} blendAdr={sol?.blendAdr}
               onField={onField} onRooms={onRooms} onName={onName}
               onToggleLock={onToggleLock} onDelete={onDelete}
             />
