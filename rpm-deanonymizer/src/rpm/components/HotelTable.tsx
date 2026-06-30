@@ -6,6 +6,8 @@ interface Props {
   rows: Rows | null;
   month: MonthData;
   monthLocked: boolean;
+  blendOcc?: number;
+  blendAdr?: number;
   onField: (id: number, field: keyof Hotel, value: string) => void;
   onRooms: (id: number, value: string) => void;
   onName: (id: number, value: string) => void;
@@ -16,10 +18,20 @@ interface Props {
 const COLS = ['', '#', 'Hotel', 'Keys', 'Avail', 'Occ %', 'Occ Rk', 'Occ Idx', 'Sold', 'ADR $', 'ADR Rk', 'ADR Idx', 'Revenue', 'RevPAR', 'RPI'];
 const f1 = (n: number) => (isFinite(n) ? n.toFixed(1) : '–');
 
+const TOL = 0.15;
+function cue(current: number | undefined, target: number, kind: 'pct' | 'usd') {
+  if (current == null || !isFinite(current) || !isFinite(target) || Math.abs(current - target) <= TOL) return null;
+  const low = current < target; // current below target → needs to come up
+  const txt = kind === 'pct' ? `${current.toFixed(1)}%` : `$${current.toFixed(2)}`;
+  return <div className="tie-cue">{low ? '▲' : '▼'} {txt}</div>;
+}
+
 export default function HotelTable({
-  hotels, rows, month, monthLocked, onField, onRooms, onName, onToggleLock, onDelete,
+  hotels, rows, month, monthLocked, blendOcc, blendAdr, onField, onRooms, onName, onToggleLock, onDelete,
 }: Props) {
   const rowFor = (id: number) => rows?.hs.find((r) => r.id === id);
+  const blendRevpar = (blendOcc != null && blendAdr != null && isFinite(blendOcc) && isFinite(blendAdr))
+    ? (blendOcc / 100) * blendAdr : undefined;
 
   return (
     <div className="card">
@@ -63,7 +75,6 @@ export default function HotelTable({
                     />
                   </td>
                   <td className="faint">{r ? Math.round(r.avail).toLocaleString() : ''}</td>
-                  {/* Occ % */}
                   <td>
                     {h.isSubject ? (
                       <input className="tb-input ro" disabled value={r ? f1(r.occ) + '%' : ''} />
@@ -77,7 +88,6 @@ export default function HotelTable({
                       />
                     )}
                   </td>
-                  {/* Occ Rank */}
                   <td>
                     {h.isSubject ? (
                       <input className="tb-input ro" disabled value={sRkO} />
@@ -91,7 +101,6 @@ export default function HotelTable({
                   </td>
                   <td className="mut">{r ? f1(r.occIdx) : ''}</td>
                   <td className="faint">{r ? Math.round(r.sold).toLocaleString() : ''}</td>
-                  {/* ADR $ */}
                   <td>
                     {h.isSubject ? (
                       <input className="tb-input ro" disabled value={r ? '$' + r.adr.toFixed(2) : ''} />
@@ -105,7 +114,6 @@ export default function HotelTable({
                       />
                     )}
                   </td>
-                  {/* ADR Rank */}
                   <td>
                     {h.isSubject ? (
                       <input className="tb-input ro" disabled value={sRkA} />
@@ -129,11 +137,14 @@ export default function HotelTable({
                 <td /><td /><td style={{ textAlign: 'left' }}>{rows.strRow.label}</td>
                 <td>{rows.strRow.rooms}</td>
                 <td>{Math.round(rows.strRow.avail).toLocaleString()}</td>
-                <td>{rows.strRow.occ.toFixed(1)}%</td><td /><td>100</td>
+                <td>{rows.strRow.occ.toFixed(1)}%{cue(blendOcc, rows.strRow.occ, 'pct')}</td>
+                <td /><td>100</td>
                 <td>{Math.round(rows.strRow.sold).toLocaleString()}</td>
-                <td>${rows.strRow.adr.toFixed(2)}</td><td /><td>100</td>
+                <td>${rows.strRow.adr.toFixed(2)}{cue(blendAdr, rows.strRow.adr, 'usd')}</td>
+                <td /><td>100</td>
                 <td>{money(rows.strRow.rev)}</td>
-                <td>${rows.strRow.revpar.toFixed(2)}</td><td>100</td>
+                <td>${rows.strRow.revpar.toFixed(2)}{cue(blendRevpar, rows.strRow.revpar, 'usd')}</td>
+                <td>100</td>
               </tr>
             )}
           </tbody>
