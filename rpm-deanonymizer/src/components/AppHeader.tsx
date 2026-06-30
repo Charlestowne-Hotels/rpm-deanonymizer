@@ -18,8 +18,8 @@ export default function AppHeader() {
     <header className="app-header">
       <div className="app-header-inner">
         <Link to="/app" className="brand">
-          <span className="brand-mark"><i /><i /></span>
-          <span className="brand-name">RPM De-Anonymizer</span>
+          <BrandMark size={28} /> 
+          <span className="brand-name">Clarity</span>
         </Link>
 
         <nav className="nav">
