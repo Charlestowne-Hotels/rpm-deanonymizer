@@ -100,7 +100,9 @@ function anchoredAxis(
   return out;
 }
 
-/* ---------- solver ---------- */
+/* ---------- solver ----------
+   Comp set figures (OCC/ADR/RevPAR compSet) represent the COMPETITORS ONLY,
+   excluding the subject. Tie-out reconciles competitors alone to those figures. */
 export function solve(m: MonthData, hotels: Hotel[], B: Bounds): Solution {
   const warn: string[] = [];
   const subj = hotels.find((h) => h.isSubject);
@@ -109,42 +111,41 @@ export function solve(m: MonthData, hotels: Hotel[], B: Bounds): Solution {
   if (!comps.length) { warn.push('No competitors found in the report.'); return { occ: {}, adr: {}, warn, tie: false }; }
 
   const occS = m.occ.subject, adrS = m.adr.subject, OCC = m.occ.compSet, ADR = m.adr.compSet;
-  const roomsSubj = subj.rooms || 0;
   const roomsComps = comps.reduce((s, h) => s + (h.rooms || 0), 0);
   if (roomsComps <= 0) warn.push('Enter competitor room counts (Keys) so the math can weight hotels.');
 
   const occ: Record<number, number> = {}, adr: Record<number, number> = {};
-  occ[subj.id] = occS; adr[subj.id] = adrS;
+  occ[subj.id] = occS; adr[subj.id] = adrS; // subject keeps its own report values
 
-  const subjSold = roomsSubj * occS / 100;
+  // OCC target is competitors only — subject is NOT part of the comp-set blend.
   const soldFixed = comps.filter((h) => fixedOcc(h) != null)
     .reduce((s, h) => s + (h.rooms || 0) * (fixedOcc(h) as number) / 100, 0);
   const roomsMov = comps.filter((h) => fixedOcc(h) == null).reduce((s, h) => s + (h.rooms || 0), 0);
-  const totalSoldTarget = OCC / 100 * (roomsComps + roomsSubj);
-  const soldMovTarget = totalSoldTarget - subjSold - soldFixed;
+  const totalSoldTarget = OCC / 100 * roomsComps;          // comps only (no roomsSubj)
+  const soldMovTarget = totalSoldTarget - soldFixed;        // no subjSold subtraction
   const freeMeanOcc = roomsMov > 0 ? soldMovTarget / roomsMov * 100 : OCC;
   const occOut = anchoredAxis(occS, m.occ.subjectRank, comps, fixedOcc, (h) => num(h.rankOcc),
     (h) => (h.rooms || 0), freeMeanOcc, B.oLo, B.oHi, warn, 'Occupancy');
   comps.forEach((h) => { occ[h.id] = occOut[h.id] != null ? occOut[h.id] : freeMeanOcc; });
 
   const soldU = (h: Hotel) => (h.rooms || 0) * (occ[h.id] || 0) / 100;
-  const subjSoldU = soldU(subj);
-  const totalSoldU = comps.reduce((s, h) => s + soldU(h), 0) + subjSoldU;
+  // ADR/revenue target is competitors only — subject excluded.
+  const compSoldU = comps.reduce((s, h) => s + soldU(h), 0);
   const revFixed = comps.filter((h) => fixedAdr(h) != null)
     .reduce((s, h) => s + soldU(h) * (fixedAdr(h) as number), 0);
   const soldMovU = comps.filter((h) => fixedAdr(h) == null).reduce((s, h) => s + soldU(h), 0);
-  const totalRevTarget = ADR * totalSoldU;
-  const revMovTarget = totalRevTarget - subjSoldU * adrS - revFixed;
+  const totalRevTarget = ADR * compSoldU;                   // comps sold only
+  const revMovTarget = totalRevTarget - revFixed;           // no subject revenue subtraction
   const freeMeanAdr = soldMovU > 0 ? revMovTarget / soldMovU : ADR;
   const adrOut = anchoredAxis(adrS, m.adr.subjectRank, comps, fixedAdr, (h) => num(h.rankAdr),
     soldU, freeMeanAdr, B.aLo, B.aHi, warn, 'ADR');
   comps.forEach((h) => { adr[h.id] = adrOut[h.id] != null ? adrOut[h.id] : freeMeanAdr; });
 
+  // Tie-out: competitors alone must blend to the report comp-set figures.
   const cSold = comps.reduce((s, h) => s + (h.rooms || 0) * (occ[h.id] || 0) / 100, 0);
   const cRev = comps.reduce((s, h) => s + (h.rooms || 0) * (occ[h.id] || 0) / 100 * (adr[h.id] || 0), 0);
-  const aSold = cSold + subjSold, aRooms = roomsComps + roomsSubj, aRev = cRev + subjSoldU * adrS;
-  const blendOcc = aRooms > 0 ? aSold / aRooms * 100 : NaN;
-  const blendAdr = aSold > 0 ? aRev / aSold : NaN;
+  const blendOcc = roomsComps > 0 ? cSold / roomsComps * 100 : NaN;
+  const blendAdr = cSold > 0 ? cRev / cSold : NaN;
   const tie = Math.abs(blendOcc - OCC) < 0.15 && Math.abs(blendAdr - ADR) < 0.15;
   return { occ, adr, warn, tie, blendOcc, blendAdr };
 }
@@ -168,10 +169,11 @@ export function computeRows(sol: Solution, m: MonthData, hotels: Hotel[]): Rows 
   hs.slice().sort((a, b) => b.adr - a.adr).forEach((h, i) => { h.adrRk = i + 1; });
   hs.slice().sort((a, b) => b.revpar - a.revpar).forEach((h, i) => { h.rgiRk = i + 1; });
 
-  const rmAll = hs.reduce((s, h) => s + h.rooms, 0);
-  const strAvail = rmAll * D, strSold = strAvail * OCC / 100, strRev = strSold * ADR;
+  // Bottom row = competitive set ONLY (subject excluded).
+  const compRooms = hs.filter((h) => !h.isSubject).reduce((s, h) => s + h.rooms, 0);
+  const strAvail = compRooms * D, strSold = strAvail * OCC / 100, strRev = strSold * ADR;
   const strRow: StrRow = {
-    label: 'Comp set · STR (incl. you)', rooms: rmAll, avail: strAvail,
+    label: 'Competitive Set · STR (excl. you)', rooms: compRooms, avail: strAvail,
     occ: OCC, sold: strSold, adr: ADR, rev: strRev, revpar: RP, idx: true,
   };
   return { hs, strRow, D };
