@@ -224,3 +224,5 @@
 .modal-foot { padding:14px 20px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px; }
 .set-base-btn { font:inherit; font-size:13px; font-weight:600; border:1px solid var(--line-2); background:#fff; color:var(--ink); border-radius:9px; padding:8px 13px; cursor:pointer; white-space:nowrap; }
 .set-base-btn:hover { background:var(--surf); border-color:#cdd3e0; }
+
+.tie-cue { font-size:11px; font-weight:700; color:var(--amber); margin-top:2px; white-space:nowrap; }
