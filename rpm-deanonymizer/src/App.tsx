@@ -1,3 +1,4 @@
+import BrandMark from './components/BrandMark';
 import { Routes, Route, Navigate, Link } from 'react-router-dom';
 import { useState } from 'react';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -11,8 +12,8 @@ function Landing() {
   return (
     <div className="landing">
       <div className="landing-top">
-        <span className="brand-mark"><i /><i /></span>
-        <span className="brand-name">RPM De-Anonymizer</span>
+        <BrandMark size={28} /> 
+        <span className="brand-name">Clarity</span>
         <span className="spacer" />
         <Link className="btn" to="/login" style={{ textDecoration: 'none' }}>Sign in</Link>
       </div>
@@ -49,8 +50,8 @@ function Login() {
     <div className="auth-shell">
       <div className="auth-card card">
         <div className="auth-brand">
-          <span className="brand-mark"><i /><i /></span>
-          <span>RPM De-Anonymizer</span>
+          <BrandMark size={26} />
+          <span>Clarity</span>
         </div>
         <h2 style={{ marginTop: 0, marginBottom: 6 }}>Sign in</h2>
         <p className="muted" style={{ marginTop: 0 }}>Use your Google account to continue.</p>
