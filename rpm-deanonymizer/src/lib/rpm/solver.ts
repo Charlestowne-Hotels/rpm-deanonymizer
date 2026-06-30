@@ -18,31 +18,52 @@ const fixedOcc = (h: Hotel): number | null =>
 const fixedAdr = (h: Hotel): number | null =>
   h.locked && h.lockAdr != null ? h.lockAdr : num(h.pinAdr);
 
-/* ---------- distribution helpers (verbatim math) ---------- */
+/* ---------- distribution helpers ----------
+   tieSpread is mean-preserving: the offset amp*(score - sbar) keeps the
+   weighted mean on target for ANY amplitude. `reach` (0..1) controls how
+   far the extreme scores stretch toward the limit walls. */
 interface SpreadItem { w: number; score: number; }
-function tieSpread(targetMean: number, items: SpreadItem[], lo: number, hi: number): number[] {
+function tieSpread(targetMean: number, items: SpreadItem[], lo: number, hi: number, reach = 0.06): number[] {
   const n = items.length;
   if (!n) return [];
   targetMean = clamp(targetMean, lo, hi);
   if (n === 1) return [targetMean];
   const W = items.reduce((a, it) => a + (it.w || 0), 0) || n;
   const sbar = items.reduce((a, it) => a + (it.w || 0) * it.score, 0) / W;
+  // Largest amplitude that keeps every value inside [lo, hi].
   let maxAmp = 0;
   items.forEach((it) => {
     const d = it.score - sbar;
     if (d > 1e-9) maxAmp = Math.max(maxAmp, (hi - targetMean) / d);
     else if (d < -1e-9) maxAmp = Math.max(maxAmp, (lo - targetMean) / d);
   });
-  const span = hi - lo, baseAmp = span * 0.06;
-  const amp = Math.min(baseAmp, maxAmp > 0 ? maxAmp : baseAmp);
+  const span = hi - lo;
+  // reach=0.06 → gentle cluster (old default); reach≈1 → extremes near the walls.
+  const wantAmp = span * Math.max(0.06, reach);
+  const amp = Math.min(wantAmp, maxAmp > 0 ? maxAmp : wantAmp);
   return items.map((it) => clamp(targetMean + amp * (it.score - sbar), lo, hi));
 }
+/* Even score ramp from +1 (first) to -1 (last). */
 function scores(n: number): number[] {
   if (n === 1) return [0];
   return Array.from({ length: n }, (_, k) => (n - 1 - 2 * k) / (n - 1));
 }
+/* Rank-anchored scores: min entered rank → +1 (high wall), max entered rank → -1 (low wall),
+   the rest placed proportionally by their rank between those ends. Items without a usable
+   rank get score 0 (sit near the mean). Returns null if fewer than 2 distinct ranks exist. */
+function rankScores(ranks: (number | null)[]): number[] | null {
+  const valid = ranks.filter((r): r is number => r != null && isFinite(r));
+  if (valid.length < 2) return null;
+  const lo = Math.min(...valid), hi = Math.max(...valid);
+  if (hi === lo) return null;
+  return ranks.map((r) => {
+    if (r == null || !isFinite(r)) return 0;
+    // rank lo (best) → +1, rank hi (worst) → -1
+    return 1 - 2 * (r - lo) / (hi - lo);
+  });
+}
 
-/* ---------- per-axis competitor placement (verbatim math) ---------- */
+/* ---------- per-axis competitor placement ---------- */
 function anchoredAxis(
   Vs: number, subjRank: number, comps: Hotel[],
   fixedVal: (h: Hotel) => number | null, getRank: (h: Hotel) => number | null,
@@ -65,9 +86,15 @@ function anchoredAxis(
   below.sort((a, b) => (getRank(a) as number) - (getRank(b) as number));
   const remGroup = below.concat(rest);
 
+  // How wide to spread: if the movable group carries a real rank range,
+  // stretch the extremes toward the walls; otherwise keep the gentle cluster.
+  const movRanks = movable.map((h) => getRank(h));
+  const reach = rankScores(movRanks) ? 0.92 : 0.06;
+
   if (above.length && !remGroup.length) {
-    const sc0 = scores(above.length);
-    const v0 = tieSpread(freeMean, above.map((h, i) => ({ w: w(h) || 1, score: sc0[i] })), lo, hi);
+    const rs = rankScores(above.map((h) => getRank(h)));
+    const sc0 = rs || scores(above.length);
+    const v0 = tieSpread(freeMean, above.map((h, i) => ({ w: w(h) || 1, score: sc0[i] })), lo, hi, reach);
     above.forEach((h, i) => { out[h.id] = v0[i]; });
     if (freeMean < Vs - 0.05)
       warn.push('Everything is ranked above you on ' + axis +
@@ -83,8 +110,9 @@ function anchoredAxis(
   const remMean = Wrem > 0 ? (freeMean * Wmov - sumAboveWV) / Wrem : freeMean;
 
   const ordered = below.concat(rest);
-  const sc = scores(ordered.length);
-  const vals = tieSpread(remMean, ordered.map((h, i) => ({ w: w(h) || 1, score: sc[i] })), lo, hi);
+  const rsOrd = rankScores(ordered.map((h) => getRank(h)));
+  const sc = rsOrd || scores(ordered.length);
+  const vals = tieSpread(remMean, ordered.map((h, i) => ({ w: w(h) || 1, score: sc[i] })), lo, hi, reach);
   ordered.forEach((h, i) => { out[h.id] = vals[i]; });
 
   below.forEach((h) => {
@@ -101,8 +129,7 @@ function anchoredAxis(
 }
 
 /* ---------- solver ----------
-   Comp set figures (OCC/ADR/RevPAR compSet) represent the COMPETITORS ONLY,
-   excluding the subject. Tie-out reconciles competitors alone to those figures. */
+   Comp set figures represent COMPETITORS ONLY (subject excluded). */
 export function solve(m: MonthData, hotels: Hotel[], B: Bounds): Solution {
   const warn: string[] = [];
   const subj = hotels.find((h) => h.isSubject);
@@ -115,33 +142,30 @@ export function solve(m: MonthData, hotels: Hotel[], B: Bounds): Solution {
   if (roomsComps <= 0) warn.push('Enter competitor room counts (Keys) so the math can weight hotels.');
 
   const occ: Record<number, number> = {}, adr: Record<number, number> = {};
-  occ[subj.id] = occS; adr[subj.id] = adrS; // subject keeps its own report values
+  occ[subj.id] = occS; adr[subj.id] = adrS;
 
-  // OCC target is competitors only — subject is NOT part of the comp-set blend.
   const soldFixed = comps.filter((h) => fixedOcc(h) != null)
     .reduce((s, h) => s + (h.rooms || 0) * (fixedOcc(h) as number) / 100, 0);
   const roomsMov = comps.filter((h) => fixedOcc(h) == null).reduce((s, h) => s + (h.rooms || 0), 0);
-  const totalSoldTarget = OCC / 100 * roomsComps;          // comps only (no roomsSubj)
-  const soldMovTarget = totalSoldTarget - soldFixed;        // no subjSold subtraction
+  const totalSoldTarget = OCC / 100 * roomsComps;
+  const soldMovTarget = totalSoldTarget - soldFixed;
   const freeMeanOcc = roomsMov > 0 ? soldMovTarget / roomsMov * 100 : OCC;
   const occOut = anchoredAxis(occS, m.occ.subjectRank, comps, fixedOcc, (h) => num(h.rankOcc),
     (h) => (h.rooms || 0), freeMeanOcc, B.oLo, B.oHi, warn, 'Occupancy');
   comps.forEach((h) => { occ[h.id] = occOut[h.id] != null ? occOut[h.id] : freeMeanOcc; });
 
   const soldU = (h: Hotel) => (h.rooms || 0) * (occ[h.id] || 0) / 100;
-  // ADR/revenue target is competitors only — subject excluded.
   const compSoldU = comps.reduce((s, h) => s + soldU(h), 0);
   const revFixed = comps.filter((h) => fixedAdr(h) != null)
     .reduce((s, h) => s + soldU(h) * (fixedAdr(h) as number), 0);
   const soldMovU = comps.filter((h) => fixedAdr(h) == null).reduce((s, h) => s + soldU(h), 0);
-  const totalRevTarget = ADR * compSoldU;                   // comps sold only
-  const revMovTarget = totalRevTarget - revFixed;           // no subject revenue subtraction
+  const totalRevTarget = ADR * compSoldU;
+  const revMovTarget = totalRevTarget - revFixed;
   const freeMeanAdr = soldMovU > 0 ? revMovTarget / soldMovU : ADR;
   const adrOut = anchoredAxis(adrS, m.adr.subjectRank, comps, fixedAdr, (h) => num(h.rankAdr),
     soldU, freeMeanAdr, B.aLo, B.aHi, warn, 'ADR');
   comps.forEach((h) => { adr[h.id] = adrOut[h.id] != null ? adrOut[h.id] : freeMeanAdr; });
 
-  // Tie-out: competitors alone must blend to the report comp-set figures.
   const cSold = comps.reduce((s, h) => s + (h.rooms || 0) * (occ[h.id] || 0) / 100, 0);
   const cRev = comps.reduce((s, h) => s + (h.rooms || 0) * (occ[h.id] || 0) / 100 * (adr[h.id] || 0), 0);
   const blendOcc = roomsComps > 0 ? cSold / roomsComps * 100 : NaN;
@@ -169,7 +193,6 @@ export function computeRows(sol: Solution, m: MonthData, hotels: Hotel[]): Rows 
   hs.slice().sort((a, b) => b.adr - a.adr).forEach((h, i) => { h.adrRk = i + 1; });
   hs.slice().sort((a, b) => b.revpar - a.revpar).forEach((h, i) => { h.rgiRk = i + 1; });
 
-  // Bottom row = competitive set ONLY (subject excluded).
   const compRooms = hs.filter((h) => !h.isSubject).reduce((s, h) => s + h.rooms, 0);
   const strAvail = compRooms * D, strSold = strAvail * OCC / 100, strRev = strSold * ADR;
   const strRow: StrRow = {
