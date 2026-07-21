@@ -18,49 +18,80 @@ const fixedOcc = (h: Hotel): number | null =>
 const fixedAdr = (h: Hotel): number | null =>
   h.locked && h.lockAdr != null ? h.lockAdr : num(h.pinAdr);
 
-/* ---------- distribution helpers ----------
-   tieSpread is mean-preserving: the offset amp*(score - sbar) keeps the
-   weighted mean on target for ANY amplitude. `reach` (0..1) controls how
-   far the extreme scores stretch toward the limit walls. */
-interface SpreadItem { w: number; score: number; }
-function tieSpread(targetMean: number, items: SpreadItem[], lo: number, hi: number, reach = 0.06): number[] {
-  const n = items.length;
-  if (!n) return [];
-  targetMean = clamp(targetMean, lo, hi);
-  if (n === 1) return [targetMean];
-  const W = items.reduce((a, it) => a + (it.w || 0), 0) || n;
-  const sbar = items.reduce((a, it) => a + (it.w || 0) * it.score, 0) / W;
-  // Largest amplitude that keeps every value inside [lo, hi].
-  let maxAmp = 0;
-  items.forEach((it) => {
-    const d = it.score - sbar;
-    if (d > 1e-9) maxAmp = Math.max(maxAmp, (hi - targetMean) / d);
-    else if (d < -1e-9) maxAmp = Math.max(maxAmp, (lo - targetMean) / d);
+/* ---------- rank-driven placement ----------
+   Places movable competitors around the subject value Vs using their entered
+   ranks, guaranteeing the room-weighted mean of the movable group lands on
+   `mean` (so the STR totals tie out) before any wall clamping.
+
+   Model: each competitor is v_i = Vs + g * S * score_i, where score_i in [-1,1]
+   comes from the rank gap to the subject (subject pinned at 0), S is a base
+   spread, and g is one of two side-scales (gA above the subject, gB below).
+   gA, gB are the least-distorting pair (min (gA-1)^2 + (gB-1)^2) that still
+   satisfies the tie-out constraint — a closed-form Lagrange solution.
+
+   spread : how far the extreme ranks reach toward the nearest wall (0..1)
+   p      : >1 makes the #1 / #N ranks stand apart from the pack ("lonely corner")
+*/
+function spreadByRank(
+  Vs: number, subjRank: number, mean: number,
+  movable: Hotel[], getRank: (h: Hotel) => number | null,
+  w: (h: Hotel) => number, lo: number, hi: number,
+  spread = 0.6, p = 1.5,
+): Record<number, number> {
+  const out: Record<number, number> = {};
+  if (!movable.length) return out;
+
+  // 1) rank -> latent score in [-1, 1], subject pinned at 0.
+  //    Better rank (smaller number) than subject -> positive (placed above).
+  let upGap = 1, dnGap = 1;
+  movable.forEach((h) => {
+    const r = getRank(h);
+    if (r == null || !isFinite(r)) return;
+    if (r < subjRank) upGap = Math.max(upGap, subjRank - r);
+    else if (r > subjRank) dnGap = Math.max(dnGap, r - subjRank);
   });
-  const span = hi - lo;
-  // reach=0.06 → gentle cluster (old default); reach≈1 → extremes near the walls.
-  const wantAmp = span * Math.max(0.06, reach);
-  const amp = Math.min(wantAmp, maxAmp > 0 ? maxAmp : wantAmp);
-  return items.map((it) => clamp(targetMean + amp * (it.score - sbar), lo, hi));
-}
-/* Even score ramp from +1 (first) to -1 (last). */
-function scores(n: number): number[] {
-  if (n === 1) return [0];
-  return Array.from({ length: n }, (_, k) => (n - 1 - 2 * k) / (n - 1));
-}
-/* Rank-anchored scores: min entered rank → +1 (high wall), max entered rank → -1 (low wall),
-   the rest placed proportionally by their rank between those ends. Items without a usable
-   rank get score 0 (sit near the mean). Returns null if fewer than 2 distinct ranks exist. */
-function rankScores(ranks: (number | null)[]): number[] | null {
-  const valid = ranks.filter((r): r is number => r != null && isFinite(r));
-  if (valid.length < 2) return null;
-  const lo = Math.min(...valid), hi = Math.max(...valid);
-  if (hi === lo) return null;
-  return ranks.map((r) => {
-    if (r == null || !isFinite(r)) return 0;
-    // rank lo (best) → +1, rank hi (worst) → -1
-    return 1 - 2 * (r - lo) / (hi - lo);
+  const score = movable.map((h) => {
+    const r = getRank(h);
+    if (r == null || !isFinite(r) || r === subjRank) return 0;
+    return r < subjRank
+      ?  Math.pow((subjRank - r) / upGap, p)
+      : -Math.pow((r - subjRank) / dnGap, p);
   });
+
+  // 2) base spread scale — symmetric room toward the nearest wall.
+  const S = Math.max(1e-6, spread * Math.min(hi - Vs, Vs - lo));
+
+  // 3) weighted score mass on each side of the subject.
+  let P = 0, N = 0, W = 0;
+  movable.forEach((h, i) => {
+    const wi = Math.max(0, w(h) || 0);
+    W += wi;
+    if (score[i] > 0) P += wi * score[i];
+    else if (score[i] < 0) N += wi * score[i]; // stays negative
+  });
+  if (W <= 0) { movable.forEach((h) => { out[h.id] = clamp(mean, lo, hi); }); return out; }
+
+  // 4) minimal-distortion side scales s.t. weighted mean == `mean`:
+  //    min (gA-1)^2 + (gB-1)^2  s.t.  gA*(S*P) + gB*(S*N) = (mean - Vs)*W
+  const a = S * P, b = S * N, K = (mean - Vs) * W;
+  let gA = 1, gB = 1;
+  const denom = a * a + b * b;
+  if (denom > 1e-9) {
+    const lambda = (K - (a + b)) / denom;
+    gA = 1 + lambda * a;
+    gB = 1 + lambda * b;
+  }
+  // Keep each side on its own side of the subject. If one side must collapse to
+  // the subject line, let the other absorb the remaining tie-out so the mean
+  // still lands exactly.
+  if (gA < 0) { gA = 0; gB = Math.abs(b) > 1e-9 ? K / b : gB; }
+  if (gB < 0) { gB = 0; gA = Math.abs(a) > 1e-9 ? K / a : gA; }
+  gA = Math.max(0, gA); gB = Math.max(0, gB);
+
+  movable.forEach((h, i) => {
+    out[h.id] = clamp(Vs + (score[i] >= 0 ? gA : gB) * S * score[i], lo, hi);
+  });
+  return out;
 }
 
 /* ---------- per-axis competitor placement ---------- */
@@ -71,60 +102,37 @@ function anchoredAxis(
   warn: string[], axis: string,
 ): Record<number, number> {
   const out: Record<number, number> = {};
+
+  // Pinned / locked hotels take their exact values and sit out of the spread.
   const fixed = comps.filter((h) => fixedVal(h) != null);
   fixed.forEach((h) => { out[h.id] = fixedVal(h) as number; });
+
   const movable = comps.filter((h) => fixedVal(h) == null);
   if (!movable.length) return out;
+
   const Wmov = movable.reduce((s, h) => s + (w(h) || 0), 0);
   if (Wmov <= 0) { movable.forEach((h) => { out[h.id] = clamp(freeMean, lo, hi); }); return out; }
 
-  const anchor = subjRank >= 1;
-  const above = anchor ? movable.filter((h) => getRank(h) != null && (getRank(h) as number) < subjRank) : [];
-  const below = anchor ? movable.filter((h) => getRank(h) != null && (getRank(h) as number) > subjRank) : [];
-  const rest = movable.filter((h) => above.indexOf(h) < 0 && below.indexOf(h) < 0);
-  above.sort((a, b) => (getRank(a) as number) - (getRank(b) as number));
-  below.sort((a, b) => (getRank(a) as number) - (getRank(b) as number));
-  const remGroup = below.concat(rest);
+  Object.assign(out, spreadByRank(Vs, subjRank, freeMean, movable, getRank, w, lo, hi));
 
-  // How wide to spread: if the movable group carries a real rank range,
-  // stretch the extremes toward the walls; otherwise keep the gentle cluster.
-  const movRanks = movable.map((h) => getRank(h));
-  const reach = rankScores(movRanks) ? 0.92 : 0.06;
-
-  if (above.length && !remGroup.length) {
-    const rs = rankScores(above.map((h) => getRank(h)));
-    const sc0 = rs || scores(above.length);
-    const v0 = tieSpread(freeMean, above.map((h, i) => ({ w: w(h) || 1, score: sc0[i] })), lo, hi, reach);
-    above.forEach((h, i) => { out[h.id] = v0[i]; });
-    if (freeMean < Vs - 0.05)
-      warn.push('Everything is ranked above you on ' + axis +
-        ", but the totals need a lower average — they can't all stay above you and still tie out.");
-    return out;
+  // Ordering sanity vs the subject (only meaningful when the subject is ranked).
+  if (subjRank >= 1) {
+    let collide = false;
+    movable.forEach((h) => {
+      const r = getRank(h);
+      if (r == null || !isFinite(r)) return;
+      if (r < subjRank && out[h.id] <= Vs) collide = true;
+      if (r > subjRank && out[h.id] >= Vs) collide = true;
+    });
+    if (collide)
+      warn.push('Some ' + axis + ' ranks collide with your position while tying out — spread held; totals may drift.');
   }
 
-  const step = Math.max(Vs * 0.04, 0.8), nA = above.length;
-  above.forEach((h, i) => { out[h.id] = clamp(Vs + step * (nA - i), Vs + 1e-6, hi); });
-  const sumAboveWV = above.reduce((s, h) => s + (w(h) || 0) * out[h.id], 0);
-  const Wabove = above.reduce((s, h) => s + (w(h) || 0), 0);
-  const Wrem = Wmov - Wabove;
-  const remMean = Wrem > 0 ? (freeMean * Wmov - sumAboveWV) / Wrem : freeMean;
+  // Tie-out check: wall / anchor clamping can perturb the exact mean.
+  const realizedMean = movable.reduce((s, h) => s + (w(h) || 0) * (out[h.id] || 0), 0) / Wmov;
+  if (isFinite(freeMean) && Math.abs(realizedMean - freeMean) > 0.15)
+    warn.push(axis + " couldn't fully tie out within the current limits — loosen them or adjust pins.");
 
-  const ordered = below.concat(rest);
-  const rsOrd = rankScores(ordered.map((h) => getRank(h)));
-  const sc = rsOrd || scores(ordered.length);
-  const vals = tieSpread(remMean, ordered.map((h, i) => ({ w: w(h) || 1, score: sc[i] })), lo, hi, reach);
-  ordered.forEach((h, i) => { out[h.id] = vals[i]; });
-
-  below.forEach((h) => {
-    if (out[h.id] >= Vs) {
-      out[h.id] = Math.max(lo, Vs - 1e-6);
-      warn.push('A hotel ranked below you on ' + axis +
-        " can't stay below while tying out — rank held; totals may not tie.");
-    }
-  });
-
-  if (Wrem > 0 && (remMean < lo - 0.1 || remMean > hi + 0.1))
-    warn.push(axis + " can't tie out within limits — adjust pins/ranks or loosen the limits.");
   return out;
 }
 
