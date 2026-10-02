@@ -4,6 +4,8 @@ import UploadStar from './components/UploadStar';
 import HotelTable from './components/HotelTable';
 import PositioningGrid from './components/PositioningGrid';
 import LimitsPanel from './components/LimitsPanel';
+import MatrixCalibrator from './components/MatrixCalibrator';
+import type { CalibCandidate, CalibPrior, CalibResult, MatrixDot } from '../lib/rpm/calibrate';
 import { solve, computeRows, buildHotels, norm } from '../lib/rpm/solver';
 import { drawPdf } from '../lib/rpm/pdf';
 import {
@@ -13,7 +15,7 @@ import {
   loadCompBase, saveCompBase,
 } from '../lib/rpm/persistence';
 import type { CompBase } from '../lib/rpm/persistence';
-import type { Hotel, Bounds, ParsedStar, RosterEntry, MonthData, MonthState } from '../lib/rpm/types';
+import type { Hotel, Bounds, ParsedStar, RosterEntry, MonthData, MonthState, CalibSaved } from '../lib/rpm/types';
 import type { Property } from '../lib/types';
 
 const DEFAULT_BOUNDS: Bounds = { oLo: 0, oHi: 100, aLo: 0, aHi: 1000 };
@@ -27,9 +29,10 @@ function defaultBounds(m: MonthData): Bounds {
   };
 }
 
-function buildMonthState(hs: Hotel[], b: Bounds, z: number, locked: boolean): MonthState {
+function buildMonthState(hs: Hotel[], b: Bounds, z: number, locked: boolean, calib: CalibSaved | null): MonthState {
   return {
     locked,
+    calib,  // null, never undefined — Firestore rejects undefined fields
     limits: { oLo: b.oLo, oHi: b.oHi, aLo: b.aLo, aHi: b.aHi, zoom: z },
     hotels: hs.map((h) => ({
       name: norm(h.name), rooms: h.rooms, pinOcc: h.pinOcc, pinAdr: h.pinAdr,
@@ -64,6 +67,10 @@ export default function RpmTool() {
   const [baseDraft, setBaseDraft] = useState<CompBase>({});
   const [savingBase, setSavingBase] = useState(false);
 
+  const [calib, setCalib] = useState<CalibSaved | null>(null);
+  const [showCalib, setShowCalib] = useState(false);
+  const [calibPrior, setCalibPrior] = useState<CalibPrior | undefined>(undefined);
+
   const [saveLabel, setSaveLabel] = useState('Save');
   const [toolErr, setToolErr] = useState('');
 
@@ -73,6 +80,7 @@ export default function RpmTool() {
 
   // Apply saved state if present; otherwise seed fresh hotels from compBase ranks.
   function applyLoaded(state: MonthState | null, fresh: Hotel[], m: MonthData, base: CompBase) {
+    setCalib(state?.calib ?? null);
     if (state) {
       setBounds({ oLo: +state.limits.oLo, oHi: +state.limits.oHi, aLo: +state.limits.aLo, aHi: +state.limits.aHi });
       setZoom(state.limits.zoom || 0.7);
@@ -174,7 +182,7 @@ export default function RpmTool() {
 
   const onMonthChange = async (newKey: string) => {
     if (!parsed || !propertyId) return;
-    try { await saveMonthState(propertyId, monthKey, buildMonthState(hotels, bounds, zoom, monthLocked)); } catch { /* ignore */ }
+    try { await saveMonthState(propertyId, monthKey, buildMonthState(hotels, bounds, zoom, monthLocked, calib)); } catch { /* ignore */ }
     const m = parsed.byMonth[newKey];
     const fresh = buildHotels(parsed, roster);
     let state: MonthState | null = null;
@@ -187,7 +195,7 @@ export default function RpmTool() {
     if (!parsed || !monthKey || !propertyId) return;
     setSaveLabel('Saving…');
     try {
-      await saveMonthState(propertyId, monthKey, buildMonthState(hotels, bounds, zoom, monthLocked));
+      await saveMonthState(propertyId, monthKey, buildMonthState(hotels, bounds, zoom, monthLocked, calib));
       setSaveLabel('Saved!');
       setTimeout(() => setSaveLabel('Save'), 2000);
     } catch (e) {
@@ -279,6 +287,54 @@ export default function RpmTool() {
     }));
   const onDelete = (id: number) => setHotels((prev) => prev.filter((h) => h.id !== id));
 
+  // ----- matrix calibration -----
+  const openCalib = async () => {
+    setCalibPrior(undefined);
+    if (parsed && propertyId) {
+      // Use the previous month's matrix reading (if any) to prefer stable assignments.
+      const i = parsed.order.indexOf(monthKey);
+      const prevKey = i > 0 ? parsed.order[i - 1] : null;
+      try {
+        const prev = prevKey ? await loadMonthState(propertyId, prevKey) : null;
+        if (prev?.calib?.result) {
+          const pr: CalibPrior = {};
+          hotels.forEach((h) => {
+            const r = prev.calib!.result[norm(h.name)];
+            if (r && !h.isSubject) pr[h.id] = { occIdx: r.occIdx, adrIdx: r.adrIdx };
+          });
+          if (Object.keys(pr).length) setCalibPrior(pr);
+        }
+      } catch { /* no prior */ }
+    }
+    setShowCalib(true);
+  };
+
+  const onCalibApply = async (cand: CalibCandidate, dots: MatrixDot[], res: CalibResult) => {
+    const byId = new Map(cand.placements.map((p) => [p.hotelId, p]));
+    const next = hotels.map((h) => {
+      const p = byId.get(h.id);
+      if (!p || h.isSubject) return h;
+      return { ...h, pinOcc: p.occ.toFixed(2), pinAdr: p.adr.toFixed(2), locked: false, lockOcc: null, lockAdr: null };
+    });
+    const saved: CalibSaved = {
+      at: Date.now(), confidence: res.confidence, dots: dots.map((d) => ({ x: d.x, y: d.y, label: d.label })),
+      assign: {}, result: {},
+    };
+    hotels.forEach((h) => {
+      const p = byId.get(h.id);
+      if (!p) return;
+      saved.assign[norm(h.name)] = p.label;
+      saved.result[norm(h.name)] = { occ: p.occ, adr: p.adr, occIdx: p.occIdx, adrIdx: p.adrIdx };
+    });
+    setHotels(next);
+    setCalib(saved);
+    setShowCalib(false);
+    if (propertyId && monthKey) {
+      try { await saveMonthState(propertyId, monthKey, buildMonthState(next, bounds, zoom, monthLocked, saved)); }
+      catch (e) { setToolErr(e instanceof Error ? e.message : 'Save failed'); }
+    }
+  };
+
   const onPdf = () => {
     if (!rows || !month) return;
     try { drawPdf(rows, month, zoom, parsed?.subjectName ?? ''); }
@@ -312,6 +368,10 @@ export default function RpmTool() {
             </select>
             <button className="set-base-btn" onClick={openBase} disabled={roster.length === 0}
               title="Set default starting ranks for unsaved months">Set Comp Base</button>
+            <button className="set-base-btn" onClick={openCalib} disabled={monthLocked}
+              title={calib ? `Matrix read ${new Date(calib.at).toLocaleDateString()} — read again to replace` : 'Paste the CoStar matrix screenshot to solve exact positions'}>
+              {calib ? 'Re-read matrix' : 'Read matrix'}
+            </button>
             <UploadStar onLoaded={onLoaded} summary={uploadSummary} />
             
             {conflicts.length > 0 && (
@@ -355,6 +415,11 @@ export default function RpmTool() {
 
           <LimitsPanel bounds={bounds} zoom={zoom} disabled={false} onBounds={setBounds} onZoom={setZoom} />
         </>
+      )}
+
+      {showCalib && month && (
+        <MatrixCalibrator month={month} hotels={hotels} prior={calibPrior}
+          onApply={onCalibApply} onClose={() => setShowCalib(false)} />
       )}
 
       {showBase && (
