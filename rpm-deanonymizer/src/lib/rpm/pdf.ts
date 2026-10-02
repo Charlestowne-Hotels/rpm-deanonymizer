@@ -13,10 +13,10 @@ export function drawPdf(rows: Rows, m: MonthData, zoom: number, subjectName: str
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(30, 41, 59);
   doc.text(prop + ' — ' + m.key, ML, y); y += 6;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(110, 116, 128);
-  doc.text('Clarity · competitor estimates · comp set incl. you', ML, y); y += 7;
+  doc.text('Clarity · competitor estimates · comp set', ML, y); y += 7;
   doc.setTextColor(30, 41, 59); doc.setFontSize(9.5);
   doc.text('You: ' + m.occ.subject.toFixed(1) + '%  $' + m.adr.subject.toFixed(2) +
-    '       Comp set (STR, incl. you): ' + m.occ.compSet.toFixed(1) + '%  $' +
+    '       Comp set: ' + m.occ.compSet.toFixed(1) + '%  $' +
     m.adr.compSet.toFixed(2) + '  RevPAR $' + m.revpar.compSet.toFixed(2), ML, y); y += 7;
 
   const R = idxRange(rows), z = zoom > 0 ? zoom : 0.7, hx = R.hx / z, hy = R.hy / z;
