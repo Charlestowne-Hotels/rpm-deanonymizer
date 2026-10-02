@@ -36,7 +36,7 @@ export async function loadMonthState(propertyId: string, monthKey: string): Prom
   if (!s.exists()) return null;
   const data = s.data() as Partial<MonthState>;
   if (!Array.isArray(data.hotels)) return null;
-  return { locked: !!data.locked, limits: data.limits!, hotels: data.hotels };
+  return { locked: !!data.locked, limits: data.limits!, hotels: data.hotels, calib: data.calib ?? null };
 }
 
 export async function saveMonthState(propertyId: string, monthKey: string, state: MonthState): Promise<void> {
