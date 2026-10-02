@@ -44,9 +44,19 @@ export interface StrRow {
 }
 export interface Rows { hs: HotelRow[]; strRow: StrRow; D: number; }
 
+/** Result of reading the CoStar matrix for a month (keyed by norm(hotel name)). */
+export interface CalibSaved {
+  at: number;
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  dots: Array<{ x: number; y: number; label: number }>;
+  assign: Record<string, number>;
+  result: Record<string, { occ: number; adr: number; occIdx: number; adrIdx: number }>;
+}
+
 // Persisted per-month shape: properties/{propertyId}/months/{monthKey}
 export interface MonthState {
   locked: boolean;
+  calib?: CalibSaved | null;
   limits: { oLo: number; oHi: number; aLo: number; aHi: number; zoom: number };
   hotels: Array<{
     name: string; rooms: number | '';
